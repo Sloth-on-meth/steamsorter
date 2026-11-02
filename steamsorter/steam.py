@@ -14,7 +14,7 @@ from datetime import datetime
 
 API = "https://api.steampowered.com"
 STORE = "https://store.steampowered.com"
-UA = "SteamSorter/0.1 (+https://github.com/sloth-on-meth/steamsorter)"
+UA = "SteamSorter/0.2 (+https://github.com/sloth-on-meth/steamsorter)"
 
 
 class SteamError(Exception):
@@ -260,6 +260,7 @@ class SteamClient:
             "release_sort": parse_release(release),
             "metacritic": (d.get("metacritic") or {}).get("score"),
             "short_desc": d.get("short_description", ""),
+            "header_image": d.get("header_image", ""),
         }
 
     def app_reviews(self, appid: int, stop: threading.Event | None = None) -> dict:

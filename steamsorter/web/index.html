@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamSorter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #07090e;
+  --bg2: #0d1119;
+  --panel: rgba(20, 25, 36, .72);
+  --panel-solid: #141924;
+  --line: rgba(255, 255, 255, .07);
+  --line2: rgba(255, 255, 255, .12);
+  --text: #e9edf5;
+  --muted: #8a93a6;
+  --dim: #5c6578;
+  --accent: #7c5cff;
+  --accent2: #22d3ee;
+  --grad: linear-gradient(135deg, #7c5cff 0%, #22d3ee 100%);
+  --good: #4ade80;
+  --ok: #a3e635;
+  --mid: #fbbf24;
+  --bad: #f87171;
+  --radius: 14px;
+  --shadow: 0 20px 50px -12px rgba(0, 0, 0, .7);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(40% 35% at 15% 0%, rgba(124, 92, 255, .22), transparent 70%),
+    radial-gradient(35% 30% at 90% 10%, rgba(34, 211, 238, .14), transparent 70%),
+    radial-gradient(50% 40% at 50% 110%, rgba(124, 92, 255, .10), transparent 70%);
+  animation: drift 30s ease-in-out infinite alternate;
+}
+@keyframes drift { to { transform: translate3d(3%, 2%, 0) scale(1.05); } }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- layout ---------- */
+.app { display: grid; grid-template-columns: 272px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+header {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 14px;
+  padding: 14px 22px; border-bottom: 1px solid var(--line);
+  background: rgba(7, 9, 14, .6); backdrop-filter: blur(18px) saturate(1.4);
+  position: relative; z-index: 5;
+}
+.logo { display: flex; align-items: center; gap: 10px; font-family: "Space Grotesk", Inter, sans-serif; font-weight: 700; font-size: 19px; letter-spacing: -.02em; white-space: nowrap; }
+.logo-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--grad); display: grid; place-items: center; box-shadow: 0 6px 20px -4px rgba(124,92,255,.7); }
+.logo-mark svg { width: 18px; height: 18px; }
+.logo b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.search { flex: 1; max-width: 520px; min-width: 0; position: relative; margin-left: 18px; }
+.search input {
+  width: 100%; padding: 10px 14px 10px 40px; border-radius: 12px; border: 1px solid var(--line2);
+  background: rgba(255,255,255,.04); outline: none; transition: .2s;
+}
+.search input:focus { border-color: rgba(124,92,255,.7); background: rgba(255,255,255,.06); box-shadow: 0 0 0 4px rgba(124,92,255,.15); }
+.search svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); width: 16px; color: var(--muted); }
+.search kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+kbd { font: 11px/1 Inter, sans-serif; padding: 3px 6px; border-radius: 5px; border: 1px solid var(--line2); color: var(--muted); background: rgba(255,255,255,.04); }
+.spacer { flex: 1; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 11px;
+  border: 1px solid var(--line2); background: rgba(255,255,255,.04); transition: .18s; white-space: nowrap; font-weight: 500;
+}
+.btn:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.2); }
+.btn svg { width: 16px; height: 16px; }
+.btn.icon { padding: 9px; }
+.btn.primary {
+  border: 0; background: var(--grad); color: #fff; font-weight: 600;
+  box-shadow: 0 8px 24px -8px rgba(124,92,255,.8), inset 0 1px 0 rgba(255,255,255,.25);
+}
+.btn.primary:hover { filter: brightness(1.12); transform: translateY(-1px); }
+.btn.big { padding: 13px 22px; font-size: 15px; border-radius: 13px; }
+.spin { animation: rot 1s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+.progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity .4s; }
+.progress.on { opacity: 1; }
+.progress i { display: block; height: 100%; width: 0; background: var(--grad); transition: width .6s; box-shadow: 0 0 12px rgba(124,92,255,.8); }
+.fetch-pill { font-size: 12px; color: var(--muted); display: none; align-items: center; gap: 8px; padding: 6px 11px; border-radius: 99px; background: rgba(255,255,255,.04); border: 1px solid var(--line); }
+.fetch-pill.on { display: inline-flex; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 10px var(--accent2); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* ---------- sidebar ---------- */
+aside { overflow-y: auto; padding: 18px 16px 30px 22px; border-right: 1px solid var(--line); }
+.sec { margin-bottom: 22px; }
+.sec h4 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+.sec h4 button { background: none; border: 0; color: var(--accent2); font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 500; padding: 0; }
+.presets { display: grid; gap: 6px; }
+.preset {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; text-align: left;
+  border: 1px solid var(--line); background: rgba(255,255,255,.025); transition: .18s;
+}
+.preset:hover { background: rgba(255,255,255,.06); transform: translateX(2px); }
+.preset.on { border-color: rgba(124,92,255,.6); background: linear-gradient(135deg, rgba(124,92,255,.18), rgba(34,211,238,.08)); }
+.preset .em { font-size: 18px; width: 24px; text-align: center; }
+.preset b { display: block; font-weight: 600; font-size: 13px; }
+.preset small { color: var(--muted); font-size: 11.5px; }
+.seg { display: flex; padding: 3px; border-radius: 11px; background: rgba(255,255,255,.04); border: 1px solid var(--line); }
+.seg button { flex: 1; border: 0; background: none; padding: 7px 4px; border-radius: 8px; color: var(--muted); font-size: 12.5px; font-weight: 500; transition: .15s; }
+.seg button.on { background: rgba(255,255,255,.1); color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 6px 10px; border-radius: 99px; border: 1px solid var(--line2); background: rgba(255,255,255,.03);
+  font-size: 12.5px; color: #c5ccda; transition: .15s; display: inline-flex; gap: 6px; align-items: center;
+}
+.chip:hover { border-color: rgba(255,255,255,.25); color: var(--text); }
+.chip.on { background: var(--grad); border-color: transparent; color: #fff; box-shadow: 0 4px 14px -4px rgba(124,92,255,.7); }
+.chip .n { font-size: 11px; opacity: .55; }
+.chip.on .n { opacity: .85; }
+.range { margin-top: 4px; }
+.range label { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+.range label b { color: var(--text); font-weight: 600; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--accent) var(--p, 0%), rgba(255,255,255,.1) var(--p, 0%)); outline: none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid var(--accent); box-shadow: 0 0 0 4px rgba(124,92,255,.2); cursor: pointer; }
+input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 3px solid var(--accent); cursor: pointer; }
+.toggle { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #c5ccda; cursor: pointer; padding: 4px 0; }
+.toggle input { display: none; }
+.toggle span { width: 36px; height: 20px; border-radius: 99px; background: rgba(255,255,255,.12); position: relative; transition: .2s; flex: none; }
+.toggle span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .2s; }
+.toggle input:checked + span { background: var(--accent); }
+.toggle input:checked + span::after { transform: translateX(16px); }
+
+/* ---------- main ---------- */
+main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-behavior: auto; }
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.count { font-family: "Space Grotesk", Inter; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+.count small { font-family: Inter; font-size: 13px; color: var(--muted); font-weight: 500; margin-left: 6px; letter-spacing: 0; }
+.select {
+  padding: 8px 32px 8px 12px; border-radius: 10px; border: 1px solid var(--line2); background: rgba(255,255,255,.04)
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%238a93a6' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center;
+  appearance: none; outline: none; cursor: pointer;
+}
+.select option { background: var(--panel-solid); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 22px 18px; }
+.card { position: relative; cursor: pointer; animation: rise .45s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 14ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+.cover {
+  position: relative; aspect-ratio: 2 / 3; border-radius: var(--radius); overflow: hidden; background: var(--bg2);
+  box-shadow: 0 10px 30px -10px rgba(0,0,0,.8); transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s;
+  transform: translateZ(0);
+}
+.cover::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+  background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,.16) 45%, transparent 60%);
+  background-size: 250% 100%; background-position: 120% 0; transition: background-position .8s;
+}
+.card:hover .cover { transform: translateY(-6px) scale(1.035); box-shadow: 0 26px 50px -14px rgba(0,0,0,.9), 0 0 0 1px rgba(124,92,255,.5), 0 0 40px -6px rgba(124,92,255,.45); }
+.card:hover .cover::after { background-position: -40% 0; }
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .4s; }
+.cover img.ok { opacity: 1; }
+.cover.wide img.fg { position: absolute; inset: 0; margin: auto; height: auto; aspect-ratio: 460/215; object-fit: cover; z-index: 1; box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+.cover.wide img.bgimg { filter: blur(18px) brightness(.55) saturate(1.3); transform: scale(1.3); }
+.ph { position: absolute; inset: 0; display: flex; align-items: flex-end; padding: 16px; font-family: "Space Grotesk", Inter; font-weight: 700; font-size: 19px; line-height: 1.15; letter-spacing: -.01em; }
+.ph::before { content: ""; position: absolute; inset: 0; background: radial-gradient(80% 60% at 30% 20%, rgba(255,255,255,.18), transparent 60%); }
+.badges { position: absolute; top: 9px; left: 9px; right: 9px; display: flex; justify-content: space-between; z-index: 2; pointer-events: none; }
+.badge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 8px; font-size: 12px; font-weight: 700;
+  background: rgba(8,10,15,.72); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.1);
+}
+.badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
+.badge.fam { font-weight: 600; color: #c4b5fd; }
+.badge.new { color: var(--accent2); }
+.card .meta { padding: 10px 2px 0; }
+.card .t { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .s { color: var(--muted); font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skeleton { background: linear-gradient(90deg, rgba(255,255,255,.03), rgba(255,255,255,.08), rgba(255,255,255,.03)); background-size: 200% 100%; animation: shimmer 1.6s infinite; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* list view */
+.list { display: flex; flex-direction: column; gap: 4px; }
+.row {
+  display: grid; grid-template-columns: 138px minmax(180px, 2.2fr) 200px 80px 1.3fr 70px 52px; align-items: center; gap: 16px;
+  padding: 7px 14px 7px 7px; border-radius: 12px; cursor: pointer; transition: .15s; border: 1px solid transparent;
+  animation: rise .35s both; animation-delay: calc(var(--i, 0) * 8ms);
+}
+.row:hover { background: rgba(255,255,255,.045); border-color: var(--line); }
+.row .thumb { width: 138px; aspect-ratio: 460/215; border-radius: 8px; overflow: hidden; background: var(--bg2); position: relative; }
+.row .thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: .3s; }
+.row .thumb img.ok { opacity: 1; }
+.row .thumb .ph { font-size: 12px; padding: 8px; }
+.row .t { font-weight: 600; }
+.row .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.row .num { text-align: right; font-variant-numeric: tabular-nums; color: #c5ccda; }
+.row .gen { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar { height: 6px; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; margin-top: 5px; }
+.bar i { display: block; height: 100%; background: var(--c); border-radius: inherit; box-shadow: 0 0 10px var(--c); }
+.rt { font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; white-space: nowrap; }
+.rt small { color: var(--muted); font-weight: 500; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.list-head { display: grid; grid-template-columns: 138px minmax(180px, 2.2fr) 200px 80px 1.3fr 70px 52px; gap: 16px; padding: 0 14px 8px 7px; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); font-weight: 700; }
+.list-head span { cursor: pointer; user-select: none; }
+.list-head span:hover { color: var(--text); }
+.list-head .r { text-align: right; }
+
+.empty { text-align: center; padding: 90px 20px; color: var(--muted); }
+.empty .big { font-size: 54px; margin-bottom: 10px; }
+.empty h2 { color: var(--text); font-family: "Space Grotesk", Inter; font-size: 26px; margin: 0 0 8px; letter-spacing: -.02em; }
+
+/* hero / onboarding */
+.welcome { max-width: 640px; margin: 8vh auto 0; text-align: center; }
+.welcome h1 { font-family: "Space Grotesk", Inter; font-size: 52px; line-height: 1.02; letter-spacing: -.04em; margin: 0 0 16px; }
+.welcome h1 b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.welcome p { color: var(--muted); font-size: 16px; line-height: 1.6; margin: 0 0 28px; }
+.floaters { display: flex; justify-content: center; gap: 14px; margin-bottom: 40px; perspective: 800px; }
+.floaters div { width: 92px; aspect-ratio: 2/3; border-radius: 12px; box-shadow: var(--shadow); animation: float 5s ease-in-out infinite; }
+.floaters div:nth-child(2) { animation-delay: -1s; transform: translateY(-14px); }
+.floaters div:nth-child(3) { animation-delay: -2s; }
+.floaters div:nth-child(4) { animation-delay: -3s; }
+.floaters div:nth-child(5) { animation-delay: -4s; }
+@keyframes float { 50% { transform: translateY(-16px) rotateY(10deg); } }
+
+/* ---------- modal ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 50; background: rgba(3, 4, 8, .72); backdrop-filter: blur(10px);
+  display: grid; place-items: center; padding: 30px; opacity: 0; pointer-events: none; transition: opacity .25s;
+}
+.overlay.on { opacity: 1; pointer-events: auto; }
+.modal {
+  width: min(980px, 100%); max-height: calc(100vh - 60px); overflow: auto; border-radius: 22px; background: var(--panel-solid);
+  border: 1px solid var(--line2); box-shadow: 0 40px 120px -20px rgba(0,0,0,.9); transform: translateY(20px) scale(.97); transition: transform .35s cubic-bezier(.2,.8,.2,1);
+  position: relative;
+}
+.overlay.on .modal { transform: none; }
+.modal .x { position: absolute; top: 14px; right: 14px; z-index: 5; width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgba(255,255,255,.15); background: rgba(0,0,0,.45); backdrop-filter: blur(8px); display: grid; place-items: center; }
+.modal .x:hover { background: rgba(0,0,0,.7); }
+.hero { position: relative; height: 340px; overflow: hidden; background: var(--bg2); }
+.hero .hbg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .6s, transform 8s ease-out; transform: scale(1.08); }
+.hero .hbg.ok { opacity: 1; transform: scale(1); }
+.hero .hbg.blur { filter: blur(24px) brightness(.6) saturate(1.4); transform: scale(1.3); }
+.hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20,25,36,0) 30%, rgba(20,25,36,.6) 65%, var(--panel-solid) 100%); }
+.hero .logoimg { position: absolute; left: 34px; bottom: 30px; max-width: 46%; max-height: 140px; z-index: 2; filter: drop-shadow(0 6px 20px rgba(0,0,0,.8)); opacity: 0; transition: opacity .5s; }
+.hero .logoimg.ok { opacity: 1; }
+.hero h1 { position: absolute; left: 34px; right: 34px; bottom: 26px; z-index: 2; margin: 0; font-family: "Space Grotesk", Inter; font-size: 40px; letter-spacing: -.03em; line-height: 1.05; text-shadow: 0 4px 30px rgba(0,0,0,.9); }
+.mbody { padding: 6px 34px 34px; display: grid; grid-template-columns: 1fr 280px; gap: 34px; }
+.mtitle { font-family: "Space Grotesk", Inter; font-size: 26px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.02em; }
+.verdict { display: flex; align-items: center; gap: 12px; margin: 10px 0 18px; }
+.ring { --p: 0; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,.08) 0); position: relative; }
+.ring::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--panel-solid); }
+.ring b { position: relative; font-size: 17px; font-weight: 800; }
+.verdict .v b { display: block; font-size: 16px; color: var(--c); }
+.verdict .v small { color: var(--muted); }
+.desc { color: #c5ccda; line-height: 1.65; font-size: 14.5px; margin: 0 0 20px; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+.tile { padding: 12px; border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid var(--line); }
+.tile small { display: block; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
+.tile b { font-size: 17px; font-weight: 700; display: block; margin-top: 3px; }
+.actions { display: grid; gap: 8px; }
+.actions .btn { justify-content: center; }
+.taglist { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.tag { padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,.05); font-size: 12px; color: #c5ccda; border: 1px solid var(--line); }
+.tag.g { background: rgba(124,92,255,.14); border-color: rgba(124,92,255,.3); color: #d4cbff; cursor: pointer; }
+.tag.g:hover { background: rgba(124,92,255,.28); }
+.lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin: 0 0 8px; }
+
+/* roulette */
+.roul { padding: 34px 0 30px; text-align: center; overflow: hidden; }
+.roul h2 { font-family: "Space Grotesk", Inter; font-size: 28px; margin: 0 0 6px; letter-spacing: -.02em; }
+.roul p { color: var(--muted); margin: 0 0 26px; }
+.reel-wrap { position: relative; height: 270px; margin-bottom: 24px;
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
+.reel { position: absolute; left: 50%; top: 10px; display: flex; gap: 14px; will-change: transform; }
+.reel .cover { width: 160px; flex: none; transition: transform .5s, box-shadow .5s, opacity .5s; }
+.reel.done .cover { opacity: .25; transform: scale(.92); }
+.reel.done .cover.win { opacity: 1; transform: scale(1.1); box-shadow: 0 0 0 2px #fff, 0 0 60px rgba(124,92,255,.9), 0 0 120px rgba(34,211,238,.5); }
+.pointer { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: linear-gradient(transparent, #fff 20%, #fff 80%, transparent); z-index: 3; box-shadow: 0 0 14px #fff; }
+.pointer::before, .pointer::after { content: ""; position: absolute; left: -7px; border: 8px solid transparent; }
+.pointer::before { top: -2px; border-top-color: #fff; }
+.pointer::after { bottom: -2px; border-bottom-color: #fff; }
+.winner { min-height: 92px; opacity: 0; transform: translateY(10px); transition: .5s .1s; }
+.winner.on { opacity: 1; transform: none; }
+.winner h3 { font-family: "Space Grotesk", Inter; font-size: 24px; margin: 0 0 6px; letter-spacing: -.02em; }
+.winner .row-btns { display: flex; justify-content: center; gap: 10px; margin-top: 16px; }
+
+/* settings */
+.form { padding: 34px; }
+.form h2 { font-family: "Space Grotesk", Inter; font-size: 28px; margin: 0 0 6px; letter-spacing: -.02em; }
+.form > p { color: var(--muted); margin: 0 0 26px; line-height: 1.55; }
+.field { margin-bottom: 22px; }
+.field label { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 8px; }
+.field .opt { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: rgba(255,255,255,.07); color: var(--muted); font-weight: 500; }
+.field .inp { display: flex; gap: 8px; }
+.field input { flex: 1; padding: 11px 14px; border-radius: 11px; border: 1px solid var(--line2); background: rgba(0,0,0,.25); outline: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; transition: .2s; min-width: 0; }
+.field input:focus { border-color: rgba(124,92,255,.7); box-shadow: 0 0 0 4px rgba(124,92,255,.15); }
+.field .help { color: var(--muted); font-size: 12.5px; margin-top: 7px; line-height: 1.55; }
+.field .help a, .link { color: var(--accent2); cursor: pointer; text-decoration: none; }
+.field .help a:hover { text-decoration: underline; }
+.steps { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.err { color: var(--bad); min-height: 20px; margin-bottom: 8px; font-weight: 500; }
+.form .foot { display: flex; justify-content: flex-end; gap: 10px; }
+.exp { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; font-weight: 600; }
+.exp.ok { background: rgba(74,222,128,.12); color: var(--good); }
+.exp.bad { background: rgba(248,113,113,.12); color: var(--bad); }
+
+/* toasts */
+.toasts { position: fixed; right: 22px; bottom: 22px; z-index: 80; display: flex; flex-direction: column; gap: 10px; }
+.toast { max-width: 380px; padding: 12px 16px; border-radius: 13px; background: rgba(20,25,36,.92); backdrop-filter: blur(14px); border: 1px solid var(--line2);
+  box-shadow: var(--shadow); font-size: 13.5px; display: flex; gap: 10px; align-items: flex-start; animation: tin .4s cubic-bezier(.2,.8,.2,1); line-height: 1.45; }
+.toast.out { animation: tout .3s forwards; }
+.toast i { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--accent2); box-shadow: 0 0 10px currentColor; }
+.toast.warn i { background: var(--mid); }
+.toast.error i { background: var(--bad); }
+.toast .link { margin-left: 4px; }
+@keyframes tin { from { opacity: 0; transform: translateY(14px) scale(.96); } }
+@keyframes tout { to { opacity: 0; transform: translateX(30px); } }
+
+.sentinel { height: 1px; }
+.backtop { position: fixed; right: 26px; bottom: 26px; z-index: 6; opacity: 0; pointer-events: none; transition: .3s; transform: translateY(10px); }
+.backtop.on { opacity: 1; pointer-events: auto; transform: none; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  aside { display: none; }
+  .mbody { grid-template-columns: 1fr; }
+  .row, .list-head { grid-template-columns: 100px 1fr 110px; }
+  .row > :nth-child(n+4), .list-head > :nth-child(n+4) { display: none; }
+  .row .thumb { width: 100px; }
+  .search kbd, .hide-sm, .fetch-pill.on, .logo span { display: none; }
+  header { padding: 12px 16px; gap: 8px; }
+  .search { margin-left: 4px; }
+  main { padding: 16px 16px 60px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 18px 14px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">
+      <div class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg></div>
+      <span>Steam<b>Sorter</b></span>
+    </div>
+    <div class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" placeholder="Search your library…" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="spacer"></div>
+    <div class="fetch-pill" id="fetchPill"><span class="dot"></span><span id="fetchTxt"></span></div>
+    <button class="btn primary" id="pickBtn" title="Shortcut: R">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>
+      <span class="hide-sm">Pick something for me</span>
+    </button>
+    <button class="btn icon" id="refreshBtn" title="Refresh library from Steam">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+    </button>
+    <button class="btn icon" id="settingsBtn" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    <div class="progress" id="progress"><i></i></div>
+  </header>
+
+  <aside id="side">
+    <div class="sec">
+      <h4>Quick picks</h4>
+      <div class="presets" id="presets"></div>
+    </div>
+    <div class="sec">
+      <h4>Library</h4>
+      <div class="seg" id="segSource">
+        <button data-v="all" class="on">All</button><button data-v="own">Mine</button><button data-v="family">Family</button>
+      </div>
+    </div>
+    <div class="sec">
+      <h4>Played</h4>
+      <div class="seg" id="segPlayed">
+        <button data-v="any" class="on">Any</button><button data-v="never">Never</button><button data-v="played">Played</button>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="range">
+        <label>Min. rating <b id="minRatingV">Any</b></label>
+        <input type="range" id="minRating" min="0" max="95" step="5" value="0">
+      </div>
+      <div class="range" style="margin-top:16px">
+        <label>Min. reviews <b id="minRevV">Any</b></label>
+        <input type="range" id="minRev" min="0" max="8" step="1" value="0">
+      </div>
+      <div style="margin-top:14px">
+        <label class="toggle">Hide DLC, tools &amp; soundtracks <input type="checkbox" id="gamesOnly" checked><span></span></label>
+      </div>
+    </div>
+    <div class="sec">
+      <h4>Genres <button id="clrGenres" hidden>Clear</button></h4>
+      <div class="chips" id="genres"></div>
+    </div>
+    <div class="sec">
+      <h4>Features <button id="clrFeats" hidden>Clear</button></h4>
+      <div class="chips" id="feats"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="content"></div>
+  </main>
+</div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="toasts" id="toasts"></div>
+<button class="btn icon backtop" id="backtop" title="Back to top"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg></button>
+
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+const CDN = "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/";
+const REV_STEPS = [0, 100, 500, 1000, 5000, 10000, 25000, 50000, 100000];
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmt = n => n == null ? "—" : n.toLocaleString();
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("ss." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("ss." + k, JSON.stringify(v)); } catch {} },
+};
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined
+    ? {headers: {"X-Token": TOKEN}}
+    : {method: "POST", headers: {"X-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify(body)});
+  return r.json();
+}
+const openExt = url => api("/api/open", {url});
+
+// ---------------------------------------------------------------- state --
+const S = {
+  games: new Map(), rev: 0, configured: true, loading: false, progress: {total: 0, reviews: 0, details: 0},
+  family: false, status: "",
+  view: store.get("view", "grid"), sort: store.get("sort", "score"), desc: store.get("desc", true),
+  q: "", source: "all", played: "any", genres: new Set(), feats: new Set(),
+  minRating: 0, minRev: 0, gamesOnly: true, preset: null,
+  list: [], shown: 0,
+};
+
+const PRESETS = [
+  {id: "best", em: "🏆", t: "Best unplayed", d: "Top rated, never launched",
+   f: {played: "never", minRev: 3, minRating: 0, sort: "score", desc: true}},
+  {id: "gems", em: "💎", t: "Hidden gems", d: "Loved by few, 90%+",
+   f: {minRating: 90, minRev: 1, sort: "rating", desc: true, maxReviews: 5000}},
+  {id: "coop", em: "🤝", t: "Co-op night", d: "Games with online co-op",
+   f: {feats: ["Online Co-op"], sort: "score", desc: true}},
+  {id: "family", em: "👪", t: "Family vault", d: "Shared with you, best first",
+   f: {source: "family", sort: "score", desc: true}},
+  {id: "forgot", em: "🕰️", t: "Forgotten favourites", d: "Played a bit, then forgotten",
+   f: {played: "played", minRating: 80, sort: "last_played", desc: false}},
+];
+
+const SORTS = [
+  ["score", "Best rated (weighted)"], ["rating", "Rating %"], ["reviews", "Most reviewed"], ["name", "Name"],
+  ["playtime", "Most played"], ["last_played", "Recently played"], ["release", "Release date"], ["metacritic", "Metacritic"],
+];
+
+function color(p) {
+  if (p == null) return "#5c6578";
+  return p >= .85 ? "var(--good)" : p >= .7 ? "var(--ok)" : p >= .5 ? "var(--mid)" : "var(--bad)";
+}
+function hue(id) { return (id * 47) % 360; }
+function ph(g, cls = "ph") {
+  const h = hue(g.appid);
+  return `<div class="${cls}" style="background:linear-gradient(160deg,hsl(${h} 55% 32%),hsl(${(h + 50) % 360} 60% 12%))">${esc(g.name)}</div>`;
+}
+
+// ---------------------------------------------------------- filtering --
+function matches(g, maxReviews) {
+  if (S.q && !g._lname.includes(S.q)) return false;
+  if (S.source !== "all" && g.source !== S.source) return false;
+  const played = g.playtime > 0 || g.last_played > 0;
+  if (S.played === "never" && played) return false;
+  if (S.played === "played" && !played) return false;
+  if (S.gamesOnly && g.type && g.type !== "game") return false;
+  if (S.minRating && (g.rating == null || g.rating * 100 < S.minRating)) return false;
+  const mr = REV_STEPS[S.minRev];
+  if (mr && (g.reviews ?? 0) < mr) return false;
+  if (maxReviews && (g.reviews ?? 0) > maxReviews) return false;
+  for (const x of S.genres) if (!g.genres.includes(x)) return false;
+  for (const x of S.feats) if (!g.categories.includes(x)) return false;
+  return true;
+}
+const KEYS = {
+  score: g => g.score, rating: g => g.rating, reviews: g => g.reviews, name: g => g._lname,
+  playtime: g => g.playtime || null, last_played: g => g.last_played || null,
+  release: g => g.release_sort || null, metacritic: g => g.metacritic,
+};
+function computeList() {
+  const p = PRESETS.find(x => x.id === S.preset);
+  const maxR = p && p.f.maxReviews;
+  const key = KEYS[S.sort] || KEYS.score;
+  const known = [], unknown = [];
+  for (const g of S.games.values()) {
+    if (!matches(g, maxR)) continue;
+    (key(g) == null ? unknown : known).push(g);
+  }
+  const dir = S.desc ? -1 : 1;
+  known.sort((a, b) => {
+    const x = key(a), y = key(b);
+    return x < y ? -dir : x > y ? dir : a._lname.localeCompare(b._lname);
+  });
+  unknown.sort((a, b) => a._lname.localeCompare(b._lname));
+  S.list = known.concat(unknown);
+}
+
+// ------------------------------------------------------------ images --
+// Fallback chain: portrait library art -> store header (landscape) -> placeholder.
+window.imgFail = function (img) {
+  const cover = img.isConnected && img.closest(".cover, .thumb");
+  const g = cover && S.games.get(+cover.dataset.id);
+  if (!g) return;  // card was re-rendered while the image was loading
+  const step = +(img.dataset.step || 0) + 1;
+  img.dataset.step = step;
+  if (cover.classList.contains("thumb")) {
+    if (step === 1) { img.src = CDN + g.appid + "/capsule_231x87.jpg"; return; }
+    cover.insertAdjacentHTML("beforeend", ph(g)); img.remove(); return;
+  }
+  if (step === 1) {
+    // Landscape fallback shown on a blurred copy of itself.
+    const src = g.header || (CDN + g.appid + "/header.jpg");
+    cover.classList.add("wide");
+    img.classList.add("bgimg");
+    img.src = src;
+    const fg = document.createElement("img");
+    fg.className = "fg"; fg.src = src; fg.alt = "";
+    fg.onload = () => fg.classList.add("ok");
+    fg.onerror = () => window.imgFail(img);
+    cover.appendChild(fg);
+    return;
+  }
+  cover.classList.remove("wide");
+  cover.querySelectorAll("img").forEach(i => i.remove());
+  cover.insertAdjacentHTML("beforeend", ph(g));
+};
+function coverHTML(g, extraCls = "") {
+  return `<div class="cover ${extraCls}" data-id="${g.appid}"><img loading="lazy" alt="" src="${CDN}${g.appid}/library_600x900.jpg" onload="this.classList.add('ok')" onerror="imgFail(this)"></div>`;
+}
+function thumbHTML(g) {
+  const src = g.header || CDN + g.appid + "/header.jpg";
+  return `<div class="thumb" data-id="${g.appid}"><img loading="lazy" alt="" src="${src}" onload="this.classList.add('ok')" onerror="imgFail(this)"></div>`;
+}
+
+// ----------------------------------------------------------- render ---
+const CHUNK = 96;
+let observer;
+
+function cardBadges(g) {
+  const r = g.rating != null ? `<span class="badge" style="--c:${color(g.rating)}"><i></i>${Math.round(g.rating * 100)}%</span>`
+    : g.has_reviews ? "" : `<span class="badge skeleton" style="width:46px;height:24px"></span>`;
+  const f = g.source === "family" ? `<span class="badge fam" title="Shared by ${esc(g.owners.join(", "))}">👪 ${esc((g.owners[0] || "Family").split(" ")[0])}</span>` : "";
+  return `<div class="badges">${r || "<span></span>"}${f}</div>`;
+}
+function subline(g) {
+  const bits = [];
+  if (g.genres.length) bits.push(g.genres.slice(0, 2).join(" · "));
+  if (g.playtime) bits.push(`${g.playtime >= 600 ? Math.round(g.playtime / 60) : (g.playtime / 60).toFixed(1)} h`);
+  else if (!g.last_played) bits.push("Unplayed");
+  return esc(bits.join("  ·  ") || (g.has_details ? "" : "…"));
+}
+function cardHTML(g, i) {
+  return `<div class="card" data-id="${g.appid}" style="--i:${i % CHUNK}">
+    ${coverHTML(g).replace("</div>", cardBadges(g) + "</div>")}
+    <div class="meta"><div class="t">${esc(g.name)}</div><div class="s">${subline(g)}</div></div></div>`;
+}
+function rowHTML(g, i) {
+  const r = g.rating;
+  const rel = g.release_sort ? g.release_sort.slice(0, 4) : "—";
+  const hrs = g.playtime ? (g.playtime / 60).toFixed(g.playtime >= 600 ? 0 : 1) + " h" : "—";
+  const lib = g.source === "family" ? `<span style="color:#c4b5fd">👪 ${esc(g.owners[0] || "Family")}</span>` : "You";
+  return `<div class="row" data-id="${g.appid}" style="--i:${i % CHUNK}">
+    ${thumbHTML(g)}
+    <div style="min-width:0"><div class="t">${esc(g.name)}</div><div class="s">${lib}</div></div>
+    <div style="--c:${color(r)}">${r != null ? `<div class="rt">${Math.round(r * 100)}% <small>${esc(g.verdict || "")}</small></div><div class="bar"><i style="width:${r * 100}%"></i></div>` : `<div class="s">${g.has_reviews ? "No reviews" : "Loading…"}</div>`}</div>
+    <div class="num">${fmt(g.reviews)}</div>
+    <div class="gen">${esc(g.genres.join(", "))}</div>
+    <div class="num">${hrs}</div>
+    <div class="num">${rel}</div></div>`;
+}
+
+function swapCover(newCover, oldCover) {
+  // Keep the already-loaded image (no flicker) but take the fresh badges.
+  oldCover.querySelector(".badges")?.remove();
+  const b = newCover.querySelector(".badges");
+  if (b) oldCover.appendChild(b);
+  newCover.replaceWith(oldCover);
+}
+function render(keepScroll = false) {
+  const main = $("#main"), content = $("#content");
+  const top = main.scrollTop;
+  const old = new Map();
+  if (keepScroll) document.querySelectorAll("#items [data-id] > .cover, #items [data-id] > .thumb").forEach(c => old.set(c.dataset.id, c));
+  if (!S.configured) return renderWelcome();
+  computeList();
+  const sortOpts = SORTS.map(([k, t]) => `<option value="${k}" ${k === S.sort ? "selected" : ""}>${t}</option>`).join("");
+  const total = S.games.size;
+  let html = `<div class="toolbar">
+    <div class="count">${fmt(S.list.length)} <small>${S.list.length === total ? "games" : `of ${fmt(total)} games`}</small></div>
+    <div class="spacer"></div>
+    <select class="select" id="sortSel">${sortOpts}</select>
+    <button class="btn icon" id="dirBtn" title="Reverse order">${S.desc
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14m-6-6 6 6 6-6"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>'}</button>
+    <div class="seg" id="segView" style="width:auto">
+      <button data-v="grid" class="${S.view === "grid" ? "on" : ""}" style="padding:7px 12px">Grid</button>
+      <button data-v="list" class="${S.view === "list" ? "on" : ""}" style="padding:7px 12px">List</button>
+    </div></div>`;
+  if (!total) {
+    html += S.loading
+      ? `<div class="grid">${Array.from({length: 18}, (_, i) => `<div class="card" style="--i:${i}"><div class="cover skeleton"></div><div class="meta"><div class="t skeleton" style="height:12px;width:70%;border-radius:4px"></div></div></div>`).join("")}</div>`
+      : `<div class="empty"><div class="big">🫥</div><h2>No games yet</h2><p>Hit refresh to load your library.</p></div>`;
+  } else if (!S.list.length) {
+    html += `<div class="empty"><div class="big">🔍</div><h2>Nothing matches</h2><p>Try loosening your filters.</p><button class="btn" onclick="resetFilters()">Reset filters</button></div>`;
+  } else if (S.view === "list") {
+    const h = (k, t, r) => `<span data-sort="${k}" class="${r ? "r" : ""}">${t}${S.sort === k ? (S.desc ? " ↓" : " ↑") : ""}</span>`;
+    html += `<div class="list-head"><span></span>${h("name", "Name")}${h("score", "Rating")}${h("reviews", "Reviews", 1)}<span>Genres</span>${h("playtime", "Played", 1)}${h("release", "Year", 1)}</div><div class="list" id="items"></div>`;
+  } else {
+    html += `<div class="grid" id="items"></div>`;
+  }
+  html += `<div class="sentinel" id="sentinel"></div>`;
+  content.innerHTML = html;
+  S.shown = 0;
+  const need = keepScroll ? Math.max(CHUNK, Math.ceil((top + main.clientHeight * 2) / 120)) : CHUNK;
+  appendMore(need);
+  if (keepScroll) {
+    document.querySelectorAll("#items > [data-id]").forEach(el => {
+      el.style.animation = "none";
+      const nc = el.querySelector(".cover, .thumb"), oc = old.get(el.dataset.id);
+      if (nc && oc && nc.className.split(" ")[0] === oc.className.split(" ")[0]) swapCover(nc, oc);
+    });
+    main.scrollTop = top;
+  } else main.scrollTop = 0;
+  bindToolbar();
+  setupObserver();
+}
+
+function appendMore(n = CHUNK) {
+  const items = $("#items");
+  if (!items || S.shown >= S.list.length) return;
+  const slice = S.list.slice(S.shown, S.shown + n);
+  const f = S.view === "list" ? rowHTML : cardHTML;
+  items.insertAdjacentHTML("beforeend", slice.map((g, i) => f(g, i)).join(""));
+  S.shown += slice.length;
+}
+function setupObserver() {
+  observer?.disconnect();
+  const sen = $("#sentinel");
+  if (!sen) return;
+  observer = new IntersectionObserver(es => { if (es[0].isIntersecting) appendMore(); }, {root: $("#main"), rootMargin: "1200px"});
+  observer.observe(sen);
+}
+function bindToolbar() {
+  $("#sortSel")?.addEventListener("change", e => { setSort(e.target.value, S.sort === e.target.value ? S.desc : !["name"].includes(e.target.value)); });
+  $("#dirBtn")?.addEventListener("click", () => setSort(S.sort, !S.desc));
+  document.querySelectorAll("#segView button").forEach(b => b.onclick = () => { S.view = b.dataset.v; store.set("view", S.view); render(); });
+  document.querySelectorAll(".list-head [data-sort]").forEach(s => s.onclick = () => {
+    const k = s.dataset.sort; setSort(k, S.sort === k ? !S.desc : k !== "name");
+  });
+}
+function setSort(k, desc) {
+  if (k === "last_played" && S.sort !== k && desc === undefined) desc = true;
+  S.sort = k; S.desc = desc; store.set("sort", k); store.set("desc", desc);
+  render();
+}
+
+// Update cards in place when background data arrives (no jumping around).
+function patchCard(g) {
+  const el = document.querySelector(`#items [data-id="${g.appid}"]`);
+  if (!el) return;
+  const i = el.style.getPropertyValue("--i");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = (S.view === "list" ? rowHTML : cardHTML)(g, 0);
+  const n = tmp.firstElementChild;
+  n.style.setProperty("--i", i); n.style.animation = "none";
+  // keep already-loaded image element to avoid flicker
+  const oldCover = el.querySelector(".cover, .thumb"), newCover = n.querySelector(".cover, .thumb");
+  if (oldCover && newCover) swapCover(newCover, oldCover);
+  el.replaceWith(n);
+}
+
+// ------------------------------------------------------------ sidebar --
+function renderFacets() {
+  const gc = new Map(), fc = new Map();
+  for (const g of S.games.values()) {
+    if (S.gamesOnly && g.type && g.type !== "game") continue;
+    g.genres.forEach(x => gc.set(x, (gc.get(x) || 0) + 1));
+    g.categories.forEach(x => fc.set(x, (fc.get(x) || 0) + 1));
+  }
+  const chip = (set, [name, n]) => `<button class="chip ${set.has(name) ? "on" : ""}" data-v="${esc(name)}">${esc(name)}<span class="n">${n}</span></button>`;
+  const sortC = m => [...m].sort((a, b) => b[1] - a[1]);
+  const G = sortC(gc), F = sortC(fc).filter(([n]) => !/^(Steam Trading Cards|Steam Cloud|Includes level editor|Stats|Remote Play on Phone|Remote Play on Tablet|Steam Leaderboards|Valve Anti-Cheat enabled|In-App Purchases|Captions available|Commentary available|Includes Source SDK|Steam Workshop|Steam Turn Notifications|Family Sharing|SteamVR Collectibles|HDR available|Steam Timeline|Tracked Controller Support|Profile Features Limited|Mods|Mods \(require HL2\))$/.test(n));
+  const showAllF = S._allFeats;
+  const Fs = showAllF ? F : F.slice(0, 14);
+  for (const x of S.feats) if (!Fs.find(f => f[0] === x)) Fs.push([x, fc.get(x) || 0]);
+  $("#genres").innerHTML = G.length ? G.map(x => chip(S.genres, x)).join("") : `<span style="color:var(--dim);font-size:12.5px">${S.games.size ? "Fetching genres…" : "—"}</span>`;
+  $("#feats").innerHTML = Fs.map(x => chip(S.feats, x)).join("") + (F.length > 14 ? `<button class="chip" id="moreFeats" style="border-style:dashed">${showAllF ? "Less" : `+${F.length - 14} more`}</button>` : "");
+  $("#clrGenres").hidden = !S.genres.size;
+  $("#clrFeats").hidden = !S.feats.size;
+  const m = $("#moreFeats");
+  if (m) m.onclick = e => { e.stopPropagation(); S._allFeats = !S._allFeats; renderFacets(); };
+}
+function renderPresets() {
+  $("#presets").innerHTML = PRESETS.filter(p => p.id !== "family" || S.family).map(p =>
+    `<button class="preset ${S.preset === p.id ? "on" : ""}" data-id="${p.id}"><span class="em">${p.em}</span><span><b>${p.t}</b><small>${p.d}</small></span></button>`).join("");
+}
+function syncControls() {
+  document.querySelectorAll("#segSource button").forEach(b => b.classList.toggle("on", b.dataset.v === S.source));
+  document.querySelectorAll("#segPlayed button").forEach(b => b.classList.toggle("on", b.dataset.v === S.played));
+  $("#minRating").value = S.minRating; $("#minRev").value = S.minRev; $("#gamesOnly").checked = S.gamesOnly;
+  $("#q").value = S.qRaw || "";
+  updateRangeLabels();
+  renderPresets(); renderFacets();
+}
+function updateRangeLabels() {
+  const mr = $("#minRating"), rv = $("#minRev");
+  mr.style.setProperty("--p", (mr.value / mr.max * 100) + "%");
+  rv.style.setProperty("--p", (rv.value / rv.max * 100) + "%");
+  $("#minRatingV").textContent = +mr.value ? mr.value + "%+" : "Any";
+  $("#minRevV").textContent = +rv.value ? fmt(REV_STEPS[rv.value]) + "+" : "Any";
+}
+window.resetFilters = function () {
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, preset: null});
+  syncControls(); render();
+};
+function applyPreset(id) {
+  if (S.preset === id) return resetFilters();
+  const p = PRESETS.find(x => x.id === id);
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true});
+  const f = p.f;
+  if (f.played) S.played = f.played;
+  if (f.source) S.source = f.source;
+  if (f.minRating != null) S.minRating = f.minRating;
+  if (f.minRev != null) S.minRev = f.minRev;
+  if (f.feats) S.feats = new Set(f.feats);
+  S.sort = f.sort; S.desc = f.desc;
+  S.preset = id;
+  syncControls(); render();
+}
+function filterChanged() { S.preset = null; renderPresets(); render(); }
+
+// --------------------------------------------------------------- modal --
+const overlay = $("#overlay"), modal = $("#modal");
+let modalKind = null;
+function openModal(html, kind) {
+  modal.innerHTML = `<button class="x" onclick="closeModal()"><svg viewBox="0 0 24 24" width="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>` + html;
+  modal.scrollTop = 0;
+  overlay.classList.add("on");
+  modalKind = kind;
+}
+window.closeModal = function () { overlay.classList.remove("on"); modalKind = null; spinning = false; };
+overlay.addEventListener("mousedown", e => { if (e.target === overlay && modalKind !== "settings-required") closeModal(); });
+
+function showGame(id) {
+  const g = S.games.get(+id);
+  if (!g) return;
+  const r = g.rating;
+  const hrs = g.playtime ? (g.playtime / 60).toFixed(1) + " h" : "Never";
+  const last = g.last_played ? new Date(g.last_played * 1000).toLocaleDateString(undefined, {year: "numeric", month: "short", day: "numeric"}) : "—";
+  const header = g.header || CDN + g.appid + "/header.jpg";
+  openModal(`
+    <div class="hero">
+      <img class="hbg" src="${CDN}${g.appid}/library_hero.jpg" alt="" onload="this.classList.add('ok')"
+        onerror="if(!this.dataset.f){this.dataset.f=1;this.classList.add('blur');this.src='${header}'}else{this.remove()}">
+      <img class="logoimg" src="${CDN}${g.appid}/logo.png" alt="" onload="this.classList.add('ok');this.parentNode.querySelector('h1').style.display='none'" onerror="this.remove()">
+      <h1>${esc(g.name)}</h1>
+    </div>
+    <div class="mbody">
+      <div>
+        ${g.source === "family" ? `<div style="color:#c4b5fd;font-size:13px">👪 Shared by ${esc(g.owners.join(", ") || "your family")}</div>` : ""}
+        <div class="verdict" style="--c:${color(r)}">
+          <div class="ring" style="--p:${r != null ? Math.round(r * 100) : 0}"><b>${r != null ? Math.round(r * 100) : "?"}</b></div>
+          <div class="v"><b>${esc(g.verdict || (g.has_reviews ? "No user reviews" : "Fetching reviews…"))}</b>
+            <small>${g.reviews != null ? fmt(g.positive) + " 👍  ·  " + fmt(g.negative) + " 👎" : ""}</small></div>
+        </div>
+        <p class="desc">${esc(g.desc) || (g.has_details ? "<i>No description on the store.</i>" : "<i>Fetching details…</i>")}</p>
+        ${g.genres.length ? `<div class="lbl">Genres</div><div class="taglist">${g.genres.map(x => `<span class="tag g" data-genre="${esc(x)}">${esc(x)}</span>`).join("")}</div>` : ""}
+        ${g.categories.length ? `<div class="lbl">Features</div><div class="taglist">${g.categories.map(x => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
+      </div>
+      <div>
+        <div class="actions" style="margin-bottom:18px">
+          <button class="btn primary big" onclick="launch(${g.appid})">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>Play</button>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="btn" onclick="openExt('https://store.steampowered.com/app/${g.appid}/')">Store page</button>
+            <button class="btn" onclick="openExt('https://steamdb.info/app/${g.appid}/')">SteamDB</button>
+          </div>
+        </div>
+        <div class="tiles">
+          <div class="tile"><small>Weighted score</small><b>${g.score != null ? (g.score * 100).toFixed(1) : "—"}</b></div>
+          <div class="tile"><small>Reviews</small><b>${fmt(g.reviews)}</b></div>
+          <div class="tile"><small>Your playtime</small><b>${hrs}</b></div>
+          <div class="tile"><small>Last played</small><b style="font-size:14px">${last}</b></div>
+          <div class="tile"><small>Released</small><b style="font-size:14px">${esc(g.release || "—")}</b></div>
+          <div class="tile"><small>Metacritic</small><b>${g.metacritic ?? "—"}</b></div>
+        </div>
+      </div>
+    </div>`, "game");
+  modal.querySelectorAll("[data-genre]").forEach(t => t.onclick = () => {
+    S.genres = new Set([t.dataset.genre]); S.preset = null; closeModal(); syncControls(); render();
+  });
+}
+window.launch = async function (id) {
+  await api("/api/launch", {appid: id});
+  toast("Launching in Steam… 🚀");
+};
+
+// ------------------------------------------------------------ roulette --
+let spinning = false;
+function pickForMe() {
+  if (!S.list.length) { toast("No games match your filters.", "warn"); return; }
+  const pool = S.list;
+  const winner = pool[Math.floor(Math.random() * pool.length)];
+  const N = 46, WIN = 40;
+  const strip = Array.from({length: N}, (_, i) => i === WIN ? winner : pool[Math.floor(Math.random() * pool.length)]);
+  openModal(`<div class="roul">
+    <h2>🎲 Let fate decide</h2>
+    <p>Picking from ${fmt(pool.length)} game${pool.length === 1 ? "" : "s"} matching your filters</p>
+    <div class="reel-wrap"><div class="pointer"></div><div class="reel" id="reel">${strip.map((g, i) => coverHTML(g, i === WIN ? "win" : "")).join("")}</div></div>
+    <div class="winner" id="winner"></div></div>`, "roulette");
+  const reel = $("#reel");
+  const W = 160 + 14;
+  const target = -(WIN * W + 80) + (Math.random() * 100 - 50);
+  reel.style.transform = "translateX(-80px)";
+  spinning = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    reel.style.transition = "transform 5.2s cubic-bezier(.12,.75,.12,1)";
+    reel.style.transform = `translateX(${target}px)`;
+  }));
+  setTimeout(() => {
+    if (!spinning) return;
+    reel.style.transition = "transform .5s cubic-bezier(.3,1.4,.5,1)";
+    reel.style.transform = `translateX(${-(WIN * W + 80)}px)`;
+    reel.classList.add("done");
+    const w = $("#winner");
+    const r = winner.rating;
+    w.innerHTML = `<h3>${esc(winner.name)}</h3>
+      <div style="color:var(--muted)">${r != null ? `<span style="color:${color(r)};font-weight:700">${Math.round(r * 100)}%</span> ${esc(winner.verdict)} · ` : ""}${esc(winner.genres.join(", "))}${winner.source === "family" ? " · 👪 " + esc(winner.owners[0] || "Family") : ""}</div>
+      <div class="row-btns">
+        <button class="btn primary big" onclick="launch(${winner.appid})"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>Play it</button>
+        <button class="btn big" id="detailsBtn">Details</button>
+        <button class="btn big" id="againBtn">Spin again</button>
+      </div>`;
+    w.classList.add("on");
+    $("#againBtn").onclick = pickForMe;
+    $("#detailsBtn").onclick = () => showGame(winner.appid);
+    spinning = false;
+  }, 5300);
+}
+
+// ------------------------------------------------------------ settings --
+async function showSettings(required = false) {
+  const s = await api("/api/settings");
+  let exp = "";
+  if (s.family_token && s.token_expires) {
+    const left = s.token_expires * 1000 - Date.now();
+    exp = left > 0 ? `<span class="exp ok">valid for ${Math.max(1, Math.round(left / 3600000))} h</span>` : `<span class="exp bad">expired</span>`;
+  }
+  const eye = id => `<button class="btn icon" type="button" onclick="const i=document.getElementById('${id}');i.type=i.type==='password'?'text':'password'" title="Show/hide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`;
+  openModal(`<form class="form" id="setForm" autocomplete="off">
+    <h2>${required ? "Connect your Steam account" : "Settings"}</h2>
+    <p>SteamSorter talks to Steam directly from your computer. Nothing is sent anywhere else.</p>
+    <div class="field">
+      <label>Steam Family access token ${exp} <span class="opt">recommended</span></label>
+      <div class="inp"><input id="f_tok" type="password" value="${esc(s.family_token)}" placeholder="eyJ…  (or paste the whole page)">${eye("f_tok")}</div>
+      <ol class="steps">
+        <li>Make sure you're logged in to the Steam store in your normal browser.</li>
+        <li>Open <a class="link" onclick="openExt('https://store.steampowered.com/pointssummary/ajaxgetasyncconfig')">this page</a> and copy everything (Ctrl+A, Ctrl+C).</li>
+        <li>Paste it here. That's it: it shows your family's games and identifies you.</li>
+      </ol>
+      <div class="help">The token expires after about a day. Your own games keep working, but you'll need a fresh token to see family games.</div>
+    </div>
+    <div class="field">
+      <label>Steam Web API key <span class="opt">optional</span></label>
+      <div class="inp"><input id="f_key" type="password" value="${esc(s.api_key)}" placeholder="32 hex characters">${eye("f_key")}</div>
+      <div class="help">Lets you load your own games without refreshing a token. Get one <a class="link" onclick="openExt('https://steamcommunity.com/dev/apikey')">here</a> (any domain name works).</div>
+    </div>
+    <div class="field">
+      <label>Steam ID or profile link <span class="opt">filled in automatically from the token</span></label>
+      <div class="inp"><input id="f_id" value="${esc(s.steam_id)}" placeholder="https://steamcommunity.com/id/yourname"></div>
+    </div>
+    <div class="err" id="setErr"></div>
+    <div class="foot">${required ? "" : `<button class="btn" type="button" onclick="closeModal()">Cancel</button>`}<button class="btn primary" type="submit">Save &amp; load library</button></div>
+  </form>`, required ? "settings-required" : "settings");
+  if (required) $(".modal .x").remove();
+  $("#setForm").onsubmit = async e => {
+    e.preventDefault();
+    const res = await api("/api/settings", {family_token: $("#f_tok").value, api_key: $("#f_key").value, steam_id: $("#f_id").value});
+    if (!res.ok) { $("#setErr").textContent = res.error; return; }
+    S.configured = true; closeModal(); render(); poll(true);
+  };
+}
+
+function renderWelcome() {
+  const pals = [260, 190, 320, 30, 150];
+  $("#content").innerHTML = `<div class="welcome">
+    <div class="floaters">${pals.map(h => `<div style="background:linear-gradient(160deg,hsl(${h} 60% 45%),hsl(${h + 40} 60% 15%))"></div>`).join("")}</div>
+    <h1>Thousands of games.<br><b>Zero idea what to play.</b></h1>
+    <p>Connect your Steam account to sort your whole library, plus everything your Steam Family shares with you, by what people actually think of it.</p>
+    <button class="btn primary big" onclick="showSettings(true)">Connect Steam</button>
+  </div>`;
+}
+
+// -------------------------------------------------------------- toasts --
+function toast(msg, level = "info", ms = 4500) {
+  const t = document.createElement("div");
+  t.className = "toast " + level;
+  t.innerHTML = `<i></i><div>${esc(msg)}${level === "warn" && /token/i.test(msg) ? ` <a class="link" onclick="showSettings()">Open settings</a>` : ""}</div>`;
+  $("#toasts").appendChild(t);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, level === "info" ? ms : ms * 2.5);
+}
+
+// ---------------------------------------------------------------- poll --
+let pollTimer, lastStatus = null, facetTimer, lastResort = 0;
+async function poll(force = false) {
+  clearTimeout(pollTimer);
+  let st;
+  try { st = await api("/api/state?since=" + (force ? 0 : S.rev)); }
+  catch { pollTimer = setTimeout(poll, 3000); return; }
+  const wasConfigured = S.configured;
+  S.configured = st.configured; S.loading = st.loading; S.progress = st.progress; S.family = st.family;
+  let structural = st.full || !S.games.size;
+  if (st.full) S.games.clear();
+  if (st.appids) {
+    const keep = new Set(st.appids);
+    for (const id of [...S.games.keys()]) if (!keep.has(id)) { S.games.delete(id); structural = true; }
+  }
+  const changed = [];
+  for (const g of st.games) {
+    g._lname = g.name.toLowerCase();
+    if (!S.games.has(g.appid)) structural = true;
+    S.games.set(g.appid, g);
+    changed.push(g);
+  }
+  S.rev = st.rev;
+
+  if (st.status && st.status !== lastStatus && lastStatus !== null) toast(st.status, st.status_level);
+  lastStatus = st.status;
+
+  // progress UI
+  const p = st.progress, done = p.reviews + p.details, all = p.total * 2;
+  const fetching = p.total > 0 && done < all;
+  $("#progress").classList.toggle("on", fetching || st.loading);
+  $("#progress i").style.width = st.loading ? "30%" : (all ? (done / all * 100) + "%" : "0");
+  $("#fetchPill").classList.toggle("on", fetching || st.loading);
+  $("#fetchTxt").textContent = st.loading ? "Loading library…" : `Ratings ${fmt(p.reviews)}/${fmt(p.total)} · Genres ${fmt(p.details)}/${fmt(p.total)}`;
+  $("#refreshBtn svg").classList.toggle("spin", st.loading);
+
+  if (!S.configured) { if (wasConfigured || !$(".welcome")) render(); }
+  else if (structural || !wasConfigured) { renderPresets(); renderFacets(); render(true); }
+  else if (changed.length && !modalKind) {
+    const main = $("#main");
+    // Near the top: re-sort so freshly rated games slot in. Further down: patch in place.
+    if (main.scrollTop < 150 && S.shown <= CHUNK && Date.now() - lastResort > 4000) { lastResort = Date.now(); render(true); }
+    else changed.forEach(patchCard);
+    clearTimeout(facetTimer); facetTimer = setTimeout(renderFacets, 1500);
+  }
+  pollTimer = setTimeout(poll, fetching || st.loading ? 1500 : 8000);
+}
+
+// --------------------------------------------------------------- events --
+$("#content").addEventListener("click", e => {
+  const c = e.target.closest(".card[data-id], .row[data-id]");
+  if (c) showGame(c.dataset.id);
+});
+$("#modal").addEventListener("click", e => {
+  const c = e.target.closest(".reel .cover");
+  if (c && !spinning) showGame(c.dataset.id);
+});
+$("#presets").addEventListener("click", e => { const b = e.target.closest(".preset"); if (b) applyPreset(b.dataset.id); });
+$("#genres").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b) return;
+  const v = b.dataset.v; S.genres.has(v) ? S.genres.delete(v) : S.genres.add(v); renderFacets(); filterChanged();
+});
+$("#feats").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b || !b.dataset.v) return;
+  const v = b.dataset.v; S.feats.has(v) ? S.feats.delete(v) : S.feats.add(v); renderFacets(); filterChanged();
+});
+$("#clrGenres").onclick = () => { S.genres.clear(); renderFacets(); filterChanged(); };
+$("#clrFeats").onclick = () => { S.feats.clear(); renderFacets(); filterChanged(); };
+for (const [id, key] of [["#segSource", "source"], ["#segPlayed", "played"]]) {
+  $(id).addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    S[key] = b.dataset.v; $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); filterChanged();
+  });
+}
+let qTimer;
+$("#q").addEventListener("input", e => {
+  S.qRaw = e.target.value; clearTimeout(qTimer);
+  qTimer = setTimeout(() => { S.q = S.qRaw.trim().toLowerCase(); render(); }, 120);
+});
+let rTimer;
+for (const id of ["#minRating", "#minRev"]) {
+  $(id).addEventListener("input", e => {
+    S[id === "#minRating" ? "minRating" : "minRev"] = +e.target.value; updateRangeLabels();
+    clearTimeout(rTimer); rTimer = setTimeout(filterChanged, 120);
+  });
+}
+$("#gamesOnly").onchange = e => { S.gamesOnly = e.target.checked; renderFacets(); filterChanged(); };
+$("#pickBtn").onclick = pickForMe;
+$("#refreshBtn").onclick = async () => { await api("/api/refresh", {}); toast("Refreshing your library…"); poll(); };
+$("#settingsBtn").onclick = () => showSettings();
+$("#main").addEventListener("scroll", () => $("#backtop").classList.toggle("on", $("#main").scrollTop > 800), {passive: true});
+$("#backtop").onclick = () => $("#main").scrollTo({top: 0, behavior: "smooth"});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && modalKind && modalKind !== "settings-required") return closeModal();
+  if (e.target.matches("input, select, textarea") || modalKind) return;
+  if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+  else if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey) pickForMe();
+});
+window.addEventListener("pagehide", () => {
+  fetch("/api/bye", {method: "POST", keepalive: true, headers: {"X-Token": TOKEN, "Content-Type": "application/json"}, body: '{"closing":true}'});
+});
+
+syncControls();
+poll(true).then(() => { if (!S.configured) showSettings(true); });
+</script>
+</body>
+</html>
