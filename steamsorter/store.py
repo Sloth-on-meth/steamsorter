@@ -63,6 +63,7 @@ class Game:
     metacritic: int | None = None
     short_desc: str = ""
     header_image: str = ""
+    assets: dict = field(default_factory=dict)
     details_ts: int = 0
     positive: int | None = None
     negative: int | None = None
@@ -96,7 +97,12 @@ CREATE TABLE IF NOT EXISTS apps (
     negative INTEGER,
     review_desc TEXT DEFAULT '',
     reviews_ts INTEGER DEFAULT 0,
-    header_image TEXT DEFAULT ''
+    header_image TEXT DEFAULT '',
+    assets TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS tags (
+    tagid INTEGER PRIMARY KEY,
+    name TEXT
 );
 CREATE TABLE IF NOT EXISTS library (
     appid INTEGER PRIMARY KEY,
@@ -118,8 +124,9 @@ class Cache:
         self.db = sqlite3.connect(str(path or config_dir() / "cache.sqlite3"), check_same_thread=False)
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(apps)")}
-        if "header_image" not in cols:  # migrate caches from v0.1
-            self.db.execute("ALTER TABLE apps ADD COLUMN header_image TEXT DEFAULT ''")
+        for col in ("header_image", "assets"):  # migrate older caches
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE apps ADD COLUMN {col} TEXT DEFAULT ''")
 
     def close(self) -> None:
         self.db.close()
@@ -141,7 +148,7 @@ class Cache:
             """SELECT l.appid, l.name, l.source, l.owners, l.playtime, l.last_played,
                       a.type, a.genres, a.categories, a.release, a.release_sort, a.metacritic,
                       a.short_desc, a.details_ts, a.positive, a.negative, a.review_desc, a.reviews_ts,
-                      a.header_image
+                      a.header_image, a.assets
                FROM library l LEFT JOIN apps a ON a.appid = l.appid"""
         ).fetchall()
         games = []
@@ -154,7 +161,7 @@ class Cache:
                     release=r[9] or "", release_sort=r[10] or "", metacritic=r[11],
                     short_desc=r[12] or "", details_ts=r[13] or 0, positive=r[14],
                     negative=r[15], review_desc=r[16] or "", reviews_ts=r[17] or 0,
-                    header_image=r[18] or "",
+                    header_image=r[18] or "", assets=json.loads(r[19] or "{}"),
                 )
             )
         return games
@@ -166,12 +173,12 @@ class Cache:
         self.db.execute("INSERT OR IGNORE INTO apps (appid) VALUES (?)", (appid,))
         self.db.execute(
             """UPDATE apps SET type=?, genres=?, categories=?, release=?, release_sort=?,
-                   metacritic=?, short_desc=?, header_image=?, details_ts=? WHERE appid=?""",
+                   metacritic=?, short_desc=?, header_image=?, assets=?, details_ts=? WHERE appid=?""",
             (
                 d.get("type", ""), json.dumps(d.get("genres", [])),
                 json.dumps(d.get("categories", [])), d.get("release", ""),
                 d.get("release_sort", ""), d.get("metacritic"), d.get("short_desc", ""),
-                d.get("header_image", ""), now, appid,
+                d.get("header_image", ""), json.dumps(d.get("assets") or {}), now, appid,
             ),
         )
 
@@ -185,6 +192,14 @@ class Cache:
 
     def commit(self) -> None:
         self.db.commit()
+
+    # ---- tag names -------------------------------------------------------
+    def save_tags(self, tags: dict[int, str]) -> None:
+        with self.db:
+            self.db.executemany("INSERT OR REPLACE INTO tags VALUES (?,?)", tags.items())
+
+    def load_tags(self) -> dict[int, str]:
+        return dict(self.db.execute("SELECT tagid, name FROM tags").fetchall())
 
     # ---- persona names ----------------------------------------------------
     def save_names(self, names: dict[str, str]) -> None:

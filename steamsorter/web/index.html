@@ -45,9 +45,7 @@ body::before {
     radial-gradient(40% 35% at 15% 0%, rgba(124, 92, 255, .22), transparent 70%),
     radial-gradient(35% 30% at 90% 10%, rgba(34, 211, 238, .14), transparent 70%),
     radial-gradient(50% 40% at 50% 110%, rgba(124, 92, 255, .10), transparent 70%);
-  animation: drift 30s ease-in-out infinite alternate;
 }
-@keyframes drift { to { transform: translate3d(3%, 2%, 0) scale(1.05); } }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -154,7 +152,7 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
 .select option { background: var(--panel-solid); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 22px 18px; }
-.card { position: relative; cursor: pointer; animation: rise .45s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 14ms); }
+.card { position: relative; cursor: pointer; content-visibility: auto; contain-intrinsic-size: 168px 300px; animation: rise .45s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 14ms); }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
 .cover {
   position: relative; aspect-ratio: 2 / 3; border-radius: var(--radius); overflow: hidden; background: var(--bg2);
@@ -178,7 +176,7 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
 .badges { position: absolute; top: 9px; left: 9px; right: 9px; display: flex; justify-content: space-between; z-index: 2; pointer-events: none; }
 .badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 8px; font-size: 12px; font-weight: 700;
-  background: rgba(8,10,15,.72); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.1);
+  background: rgba(8,10,15,.82); border: 1px solid rgba(255,255,255,.1);
 }
 .badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
 .badge.fam { font-weight: 600; color: #c4b5fd; }
@@ -214,6 +212,14 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
 .list-head span:hover { color: var(--text); }
 .list-head .r { text-align: right; }
 
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; margin-bottom: 18px;
+  background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.3); color: #fde68a; line-height: 1.45; }
+.alert.error { background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.35); color: #fecaca; }
+.alert div { flex: 1; }
+.alert .x2 { background: none; border: 0; color: inherit; opacity: .6; font-size: 18px; padding: 0 4px; }
+.tests { margin: 0 0 14px; padding: 0; list-style: none; display: grid; gap: 6px; }
+.tests li { display: flex; gap: 10px; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,.035); border: 1px solid var(--line); font-size: 13px; line-height: 1.45; word-break: break-word; }
+.tests li b { flex: none; }
 .empty { text-align: center; padding: 90px 20px; color: var(--muted); }
 .empty .big { font-size: 54px; margin-bottom: 10px; }
 .empty h2 { color: var(--text); font-family: "Space Grotesk", Inter; font-size: 26px; margin: 0 0 8px; letter-spacing: -.02em; }
@@ -403,7 +409,7 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
       </div>
     </div>
     <div class="sec">
-      <h4>Genres <button id="clrGenres" hidden>Clear</button></h4>
+      <h4>Tags <button id="clrGenres" hidden>Clear</button></h4>
       <div class="chips" id="genres"></div>
     </div>
     <div class="sec">
@@ -445,7 +451,7 @@ const openExt = url => api("/api/open", {url});
 // ---------------------------------------------------------------- state --
 const S = {
   games: new Map(), rev: 0, configured: true, loading: false, progress: {total: 0, reviews: 0, details: 0},
-  family: false, status: "",
+  family: false, status: "", statusLevel: "info", alertDismissed: false,
   view: store.get("view", "grid"), sort: store.get("sort", "score"), desc: store.get("desc", true),
   q: "", source: "all", played: "any", genres: new Set(), feats: new Set(),
   minRating: 0, minRev: 0, gamesOnly: true, preset: null,
@@ -467,7 +473,7 @@ const PRESETS = [
 
 const SORTS = [
   ["score", "Best rated (weighted)"], ["rating", "Rating %"], ["reviews", "Most reviewed"], ["name", "Name"],
-  ["playtime", "Most played"], ["last_played", "Recently played"], ["release", "Release date"], ["metacritic", "Metacritic"],
+  ["playtime", "Most played"], ["last_played", "Recently played"], ["release", "Release date"],
 ];
 
 function color(p) {
@@ -549,7 +555,8 @@ window.imgFail = function (img) {
   cover.insertAdjacentHTML("beforeend", ph(g));
 };
 function coverHTML(g, extraCls = "") {
-  return `<div class="cover ${extraCls}" data-id="${g.appid}"><img loading="lazy" alt="" src="${CDN}${g.appid}/library_600x900.jpg" onload="this.classList.add('ok')" onerror="imgFail(this)"></div>`;
+  const src = g.capsule || `${CDN}${g.appid}/library_600x900.jpg`;
+  return `<div class="cover ${extraCls}" data-id="${g.appid}"><img loading="lazy" decoding="async" alt="" src="${esc(src)}" onload="this.classList.add('ok')" onerror="imgFail(this)"></div>`;
 }
 function thumbHTML(g) {
   const src = g.header || CDN + g.appid + "/header.jpg";
@@ -620,6 +627,9 @@ function render(keepScroll = false) {
       <button data-v="grid" class="${S.view === "grid" ? "on" : ""}" style="padding:7px 12px">Grid</button>
       <button data-v="list" class="${S.view === "list" ? "on" : ""}" style="padding:7px 12px">List</button>
     </div></div>`;
+  if (S.statusLevel !== "info" && S.status && !S.alertDismissed) {
+    html += `<div class="alert ${S.statusLevel}"><div>${esc(S.status)}</div><button class="btn" onclick="showSettings()">Open settings</button><button class="x2" onclick="S.alertDismissed=true;this.parentNode.remove()">✕</button></div>`;
+  }
   if (!total) {
     html += S.loading
       ? `<div class="grid">${Array.from({length: 18}, (_, i) => `<div class="card" style="--i:${i}"><div class="cover skeleton"></div><div class="meta"><div class="t skeleton" style="height:12px;width:70%;border-radius:4px"></div></div></div>`).join("")}</div>`
@@ -661,7 +671,11 @@ function setupObserver() {
   observer?.disconnect();
   const sen = $("#sentinel");
   if (!sen) return;
-  observer = new IntersectionObserver(es => { if (es[0].isIntersecting) appendMore(); }, {root: $("#main"), rootMargin: "1200px"});
+  observer = new IntersectionObserver(es => {
+    if (!es[0].isIntersecting) return;
+    appendMore();
+    observer.unobserve(sen); observer.observe(sen);  // re-check: still near the bottom -> load more
+  }, {root: $("#main"), rootMargin: "1200px"});
   observer.observe(sen);
 }
 function bindToolbar() {
@@ -707,7 +721,12 @@ function renderFacets() {
   const showAllF = S._allFeats;
   const Fs = showAllF ? F : F.slice(0, 14);
   for (const x of S.feats) if (!Fs.find(f => f[0] === x)) Fs.push([x, fc.get(x) || 0]);
-  $("#genres").innerHTML = G.length ? G.map(x => chip(S.genres, x)).join("") : `<span style="color:var(--dim);font-size:12.5px">${S.games.size ? "Fetching genres…" : "—"}</span>`;
+  const Gs = S._allTags ? G : G.slice(0, 30);
+  for (const x of S.genres) if (!Gs.find(t => t[0] === x)) Gs.push([x, gc.get(x) || 0]);
+  $("#genres").innerHTML = G.length ? Gs.map(x => chip(S.genres, x)).join("") + (G.length > 30 ? `<button class="chip" id="moreTags" style="border-style:dashed">${S._allTags ? "Less" : `+${G.length - 30} more`}</button>` : "")
+    : `<span style="color:var(--dim);font-size:12.5px">${S.games.size ? "Fetching tags…" : "—"}</span>`;
+  const mt = $("#moreTags");
+  if (mt) mt.onclick = e => { e.stopPropagation(); S._allTags = !S._allTags; renderFacets(); };
   $("#feats").innerHTML = Fs.map(x => chip(S.feats, x)).join("") + (F.length > 14 ? `<button class="chip" id="moreFeats" style="border-style:dashed">${showAllF ? "Less" : `+${F.length - 14} more`}</button>` : "");
   $("#clrGenres").hidden = !S.genres.size;
   $("#clrFeats").hidden = !S.feats.size;
@@ -774,9 +793,9 @@ function showGame(id) {
   const header = g.header || CDN + g.appid + "/header.jpg";
   openModal(`
     <div class="hero">
-      <img class="hbg" src="${CDN}${g.appid}/library_hero.jpg" alt="" onload="this.classList.add('ok')"
+      <img class="hbg" src="${esc(g.hero || CDN + g.appid + "/library_hero.jpg")}" alt="" onload="this.classList.add('ok')"
         onerror="if(!this.dataset.f){this.dataset.f=1;this.classList.add('blur');this.src='${header}'}else{this.remove()}">
-      <img class="logoimg" src="${CDN}${g.appid}/logo.png" alt="" onload="this.classList.add('ok');this.parentNode.querySelector('h1').style.display='none'" onerror="this.remove()">
+      <img class="logoimg" src="${esc(g.logo || CDN + g.appid + "/logo.png")}" alt="" onload="this.classList.add('ok');this.parentNode.querySelector('h1').style.display='none'" onerror="this.remove()">
       <h1>${esc(g.name)}</h1>
     </div>
     <div class="mbody">
@@ -788,7 +807,7 @@ function showGame(id) {
             <small>${g.reviews != null ? fmt(g.positive) + " 👍  ·  " + fmt(g.negative) + " 👎" : ""}</small></div>
         </div>
         <p class="desc">${esc(g.desc) || (g.has_details ? "<i>No description on the store.</i>" : "<i>Fetching details…</i>")}</p>
-        ${g.genres.length ? `<div class="lbl">Genres</div><div class="taglist">${g.genres.map(x => `<span class="tag g" data-genre="${esc(x)}">${esc(x)}</span>`).join("")}</div>` : ""}
+        ${g.genres.length ? `<div class="lbl">Tags</div><div class="taglist">${g.genres.map(x => `<span class="tag g" data-genre="${esc(x)}">${esc(x)}</span>`).join("")}</div>` : ""}
         ${g.categories.length ? `<div class="lbl">Features</div><div class="taglist">${g.categories.map(x => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <div>
@@ -806,7 +825,7 @@ function showGame(id) {
           <div class="tile"><small>Your playtime</small><b>${hrs}</b></div>
           <div class="tile"><small>Last played</small><b style="font-size:14px">${last}</b></div>
           <div class="tile"><small>Released</small><b style="font-size:14px">${esc(g.release || "—")}</b></div>
-          <div class="tile"><small>Metacritic</small><b>${g.metacritic ?? "—"}</b></div>
+          <div class="tile"><small>Library</small><b style="font-size:14px">${g.source === "family" ? "👪 " + esc(g.owners[0] || "Family") : "Yours"}</b></div>
         </div>
       </div>
     </div>`, "game");
@@ -876,7 +895,7 @@ async function showSettings(required = false) {
     <p>SteamSorter talks to Steam directly from your computer. Nothing is sent anywhere else.</p>
     <div class="field">
       <label>Steam Family access token ${exp} <span class="opt">recommended</span></label>
-      <div class="inp"><input id="f_tok" type="password" value="${esc(s.family_token)}" placeholder="eyJ…  (or paste the whole page)">${eye("f_tok")}</div>
+      <div class="inp"><input id="f_tok" type="password" value="${esc(s.family_token)}" placeholder="Paste the whole page here">${eye("f_tok")}</div>
       <ol class="steps">
         <li>Make sure you're logged in to the Steam store in your normal browser.</li>
         <li>Open <a class="link" onclick="openExt('https://store.steampowered.com/pointssummary/ajaxgetasyncconfig')">this page</a> and copy everything (Ctrl+A, Ctrl+C).</li>
@@ -893,13 +912,23 @@ async function showSettings(required = false) {
       <label>Steam ID or profile link <span class="opt">filled in automatically from the token</span></label>
       <div class="inp"><input id="f_id" value="${esc(s.steam_id)}" placeholder="https://steamcommunity.com/id/yourname"></div>
     </div>
+    <ul class="tests" id="testOut"></ul>
     <div class="err" id="setErr"></div>
-    <div class="foot">${required ? "" : `<button class="btn" type="button" onclick="closeModal()">Cancel</button>`}<button class="btn primary" type="submit">Save &amp; load library</button></div>
+    <div class="foot"><button class="btn" type="button" id="testBtn" style="margin-right:auto">Test connection</button>${required ? "" : `<button class="btn" type="button" onclick="closeModal()">Cancel</button>`}<button class="btn primary" type="submit">Save &amp; load library</button></div>
   </form>`, required ? "settings-required" : "settings");
   if (required) $(".modal .x").remove();
+  const vals = () => ({family_token: $("#f_tok").value, api_key: $("#f_key").value, steam_id: $("#f_id").value});
+  $("#testBtn").onclick = async () => {
+    const b = $("#testBtn"); b.disabled = true; b.textContent = "Testing…"; $("#setErr").textContent = "";
+    $("#testOut").innerHTML = "";
+    try {
+      const res = await api("/api/test", vals());
+      $("#testOut").innerHTML = res.results.map(r => `<li><b>${r.ok ? "✅" : "❌"}</b><span>${esc(r.msg)}</span></li>`).join("");
+    } finally { b.disabled = false; b.textContent = "Test connection"; }
+  };
   $("#setForm").onsubmit = async e => {
     e.preventDefault();
-    const res = await api("/api/settings", {family_token: $("#f_tok").value, api_key: $("#f_key").value, steam_id: $("#f_id").value});
+    const res = await api("/api/settings", vals());
     if (!res.ok) { $("#setErr").textContent = res.error; return; }
     S.configured = true; closeModal(); render(); poll(true);
   };
@@ -948,8 +977,11 @@ async function poll(force = false) {
   }
   S.rev = st.rev;
 
-  if (st.status && st.status !== lastStatus && lastStatus !== null) toast(st.status, st.status_level);
-  lastStatus = st.status;
+  const statusChanged = st.status !== lastStatus;
+  if (st.status && statusChanged && lastStatus !== null && st.status_level === "info") toast(st.status, st.status_level);
+  if (statusChanged) S.alertDismissed = false;
+  lastStatus = st.status; S.status = st.status; S.statusLevel = st.status_level;
+  if (statusChanged && !structural && S.configured) render(true);
 
   // progress UI
   const p = st.progress, done = p.reviews + p.details, all = p.total * 2;
@@ -957,7 +989,7 @@ async function poll(force = false) {
   $("#progress").classList.toggle("on", fetching || st.loading);
   $("#progress i").style.width = st.loading ? "30%" : (all ? (done / all * 100) + "%" : "0");
   $("#fetchPill").classList.toggle("on", fetching || st.loading);
-  $("#fetchTxt").textContent = st.loading ? "Loading library…" : `Ratings ${fmt(p.reviews)}/${fmt(p.total)} · Genres ${fmt(p.details)}/${fmt(p.total)}`;
+  $("#fetchTxt").textContent = st.loading ? "Loading library…" : `Fetching store data ${fmt(Math.min(p.reviews, p.details))}/${fmt(p.total)}`;
   $("#refreshBtn svg").classList.toggle("spin", st.loading);
 
   if (!S.configured) { if (wasConfigured || !$(".welcome")) render(); }
@@ -983,7 +1015,7 @@ $("#modal").addEventListener("click", e => {
 });
 $("#presets").addEventListener("click", e => { const b = e.target.closest(".preset"); if (b) applyPreset(b.dataset.id); });
 $("#genres").addEventListener("click", e => {
-  const b = e.target.closest(".chip"); if (!b) return;
+  const b = e.target.closest(".chip"); if (!b || !b.dataset.v) return;
   const v = b.dataset.v; S.genres.has(v) ? S.genres.delete(v) : S.genres.add(v); renderFacets(); filterChanged();
 });
 $("#feats").addEventListener("click", e => {

@@ -3,7 +3,7 @@
 A tiny desktop app to answer "what should I play?" when you own thousands of Steam
 games. It shows your library **plus everything shared with you via Steam Family**
 as a cover-art grid, and lets you sort and filter by user rating, genre, features
-(co-op, controller support, ...), playtime, release date and more. Still stuck?
+(co-op, controller support, ...), Steam user tags, playtime, release date and more. Still stuck?
 Hit **Pick something for me** and spin the roulette.
 
 - One-click **Quick picks**: Best unplayed, Hidden gems, Co-op night, Family vault,
@@ -53,14 +53,18 @@ talk to it.
 1. Your library comes from `IPlayerService/GetOwnedGames`, and family games from
    `IFamilyGroupsService/GetSharedLibraryApps`. Family games get a 👪 badge with
    the owner's name.
-2. Two background workers fill in data for each game:
-   - **Ratings** come from the store reviews endpoint (fast, about 3 games/second).
-   - **Genres, features, release date and Metacritic** come from the store
-     `appdetails` endpoint. Steam limits it to about 200 requests per 5 minutes,
-     so **the first run takes about 1.6 s per game** (around an hour for 2,000
-     games). You can use the app the whole time: games you've played most are
-     fetched first and the list fills in as data arrives. Everything is cached,
-     and data older than 30 days is refreshed.
+2. Ratings, tags, features, release dates and cover art come from Steam's store
+   browse API (`IStoreBrowseService/GetItems`), **100 games per request**, so even
+   a few thousand games load in under a minute. Everything is cached locally and
+   refreshed after 30 days. If that API ever fails, the app falls back to the old
+   per-game store endpoints, which are much slower (about 1.6 s per game).
+
+### Troubleshooting
+
+Open **Settings → Test connection**. It checks each step (token, your library,
+Steam Family, store data) and shows exactly what Steam answered. Family problems
+are almost always an expired token, or a token copied while logged in as a
+different account.
 
 ### Ratings
 
@@ -73,7 +77,7 @@ talk to it.
 ### Tips
 
 - Keyboard: `/` searches, `R` spins the roulette, and `Esc` closes dialogs.
-- Click a genre on a game's page to filter by it.
+- Click a tag on a game's page to filter by it.
 - Steam doesn't report your playtime for family-shared games, so for those
   "played" is based on when you last launched them.
 

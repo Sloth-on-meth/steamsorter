@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import math
 import re
@@ -10,7 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 API = "https://api.steampowered.com"
 STORE = "https://store.steampowered.com"
@@ -53,13 +54,30 @@ def http_json(url: str, params: dict | None = None, timeout: float = 30) -> dict
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
     except urllib.error.HTTPError as e:
-        raise SteamError(f"HTTP {e.code} for {url.split('?')[0]}") from e
+        try:
+            body = e.read(300).decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+        hint = {401: " (token/key rejected - expired or wrong?)", 403: " (access denied - token/key wrong or expired?)",
+                429: " (rate limited)"}.get(e.code, "")
+        endpoint = url.split("?")[0].replace(API + "/", "").replace(STORE + "/", "")
+        raise SteamError(f"HTTP {e.code}{hint} from {endpoint}" + (f": {body[:160]}" if body and "<" not in body[:1] else "")) from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise SteamError(f"Network error: {e}") from e
     try:
         return json.loads(data or b"null")
     except ValueError as e:
         raise SteamError(f"Bad JSON from {url.split('?')[0]}") from e
+
+
+_JWT = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
+
+def extract_token(text: str) -> str:
+    """Find the access token in whatever the user pasted (raw JSON, the
+    Firefox JSON viewer's copy format, just the token, with quotes...)."""
+    m = _JWT.search(text or "")
+    return m.group(0) if m else (text or "").strip().strip('"')
 
 
 def steamid_from_token(token: str) -> str | None:
@@ -109,6 +127,58 @@ def parse_release(s: str | None) -> str:
     return f"{m.group(0)}-00-00" if m else ""
 
 
+# Steam store category ids (as used by IStoreBrowseService) -> names.
+CATEGORY_NAMES = {
+    1: "Multi-player", 2: "Single-player", 9: "Co-op", 20: "MMO", 22: "Steam Achievements",
+    18: "Partial Controller Support", 28: "Full controller support", 24: "Shared/Split Screen",
+    27: "Cross-Platform Multiplayer", 36: "Online PvP", 37: "Shared/Split Screen PvP",
+    38: "Online Co-op", 39: "Shared/Split Screen Co-op", 44: "Remote Play Together",
+    47: "LAN PvP", 48: "LAN Co-op", 49: "PvP",
+}
+# EStoreAppType; 0 (game) is the protobuf default, so it is usually omitted.
+STORE_APP_TYPES = {0: "game", 1: "demo", 2: "mod", 3: "video", 4: "dlc", 5: "music", 6: "video", 7: "video"}
+ASSET_CDN = "https://shared.fastly.steamstatic.com/store_item_assets/"
+
+
+def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
+    """Turn an IStoreBrowseService StoreItem into our details+reviews dicts."""
+    t = it.get("type", 0)
+    tags = sorted(it.get("tags") or [], key=lambda x: -int(x.get("weight", 0)))
+    tag_ids = [int(x["tagid"]) for x in tags] or [int(x) for x in it.get("tagids") or []]
+    tag_list = [tag_names[i] for i in tag_ids if i in tag_names][:8]
+    cats = it.get("categories") or {}
+    cat_ids = []
+    for k in ("supported_player_categoryids", "feature_categoryids", "controller_categoryids"):
+        cat_ids += cats.get(k) or []
+    rel = it.get("release") or {}
+    ts = rel.get("steam_release_date") or rel.get("original_release_date")
+    release = datetime.fromtimestamp(int(ts), timezone.utc) if ts else None
+    a = it.get("assets") or {}
+    fmt = a.get("asset_url_format") or ""
+
+    def asset(key):
+        f = a.get(key)
+        return ASSET_CDN + fmt.replace("${FILENAME}", f) if f and fmt else ""
+
+    rv = ((it.get("reviews") or {}).get("summary_filtered")) or {}
+    count = int(rv.get("review_count") or 0)
+    pct = int(rv.get("percent_positive") or 0)
+    pos = round(count * pct / 100)
+    details = {
+        "type": STORE_APP_TYPES.get(int(t), "other"),
+        "genres": tag_list,
+        "categories": [CATEGORY_NAMES[c] for c in dict.fromkeys(cat_ids) if c in CATEGORY_NAMES],
+        "release": f"{release.day} {release:%b %Y}" if release else "",
+        "release_sort": release.strftime("%Y-%m-%d") if release else "",
+        "metacritic": None,
+        "short_desc": html.unescape((it.get("basic_info") or {}).get("short_description") or ""),
+        "header_image": asset("header"),
+        "assets": {"capsule": asset("library_capsule"), "hero": asset("library_hero"), "logo": asset("library_logo") if a.get("library_logo") else ""},
+    }
+    reviews = {"positive": pos, "negative": count - pos, "review_desc": rv.get("review_score_label") or ""}
+    return {"details": details, "reviews": reviews}
+
+
 class SteamClient:
     def __init__(self, api_key: str = "", access_token: str = ""):
         self.api_key = api_key.strip()
@@ -116,6 +186,7 @@ class SteamClient:
         # Store appdetails is limited to ~200 requests / 5 min.
         self.details_throttle = Throttle(1.6)
         self.reviews_throttle = Throttle(0.35)
+        self.batch_throttle = Throttle(0.3)
 
     # ---- Web API -------------------------------------------------------
     def _auth(self, prefer_token: bool = False) -> dict:
@@ -179,8 +250,11 @@ class SteamClient:
             "IFamilyGroupsService/GetFamilyGroupForUser/v1/", {"steamid": steamid}, prefer_token=True
         )
         group = g.get("family_groupid")
+        if g.get("is_not_member_of_any_group"):
+            raise SteamError("Steam says this account isn't in a Steam Family.")
         if not group or str(group) == "0":
-            return []
+            raise SteamError(f"Steam returned no family group for this token ({json.dumps(g)[:120]}). "
+                             "Get a fresh token while logged in as yourself.")
         r = self._api(
             "IFamilyGroupsService/GetSharedLibraryApps/v1/",
             {
@@ -194,8 +268,11 @@ class SteamClient:
             },
             prefer_token=True,
         )
+        apps = r.get("apps")
+        if apps is None:
+            raise SteamError(f"Steam returned no shared apps ({json.dumps(r)[:120]}).")
         out = []
-        for a in r.get("apps", []):
+        for a in apps:
             if a.get("exclude_reason", 0):
                 continue
             owners = [str(o) for o in a.get("owner_steamids", [])]
@@ -226,7 +303,37 @@ class SteamClient:
                 names[str(p["steamid"])] = p.get("personaname", p["steamid"])
         return names
 
-    # ---- Store API (no auth) ------------------------------------------
+    # ---- Store browse API: 100 games per request ----------------------
+    def tag_names(self) -> dict[int, str]:
+        data = http_json(f"{STORE}/tagdata/populartags/english")
+        return {int(t["tagid"]): t["name"] for t in data or [] if "tagid" in t}
+
+    def store_items(self, appids: list[int], tag_names: dict[int, str]) -> dict[int, dict]:
+        req = {
+            "ids": [{"appid": a} for a in appids],
+            "context": {"language": "english", "country_code": "US", "steam_realm": 1},
+            "data_request": {
+                "include_assets": True, "include_release": True, "include_reviews": True,
+                "include_basic_info": True, "include_tag_count": 20,
+            },
+        }
+        self.batch_throttle.wait()
+        data = http_json(f"{API}/IStoreBrowseService/GetItems/v1/", {"input_json": json.dumps(req)})
+        items = ((data or {}).get("response") or {}).get("store_items")
+        if items is None:
+            raise SteamError("Unexpected response from IStoreBrowseService/GetItems")
+        out = {}
+        for it in items:
+            appid = int(it.get("appid") or it.get("id", {}).get("appid", 0) or 0)
+            if not appid:
+                continue
+            if int(it.get("success", 1)) != 1 or not it.get("visible", True) and not it.get("name"):
+                out[appid] = None  # delisted / not on the store
+                continue
+            out[appid] = parse_store_item(it, tag_names)
+        return out
+
+    # ---- Store API, one game at a time (slow fallback) ----------------
     def _store(self, path: str, params: dict, throttle: Throttle, stop: threading.Event | None) -> dict:
         for attempt in range(5):
             throttle.wait(stop)

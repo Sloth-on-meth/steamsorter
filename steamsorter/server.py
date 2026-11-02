@@ -11,10 +11,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import __version__
-from .steam import SteamClient, SteamError, rating_score, steamid_from_token, token_expiry
+from .steam import SteamClient, SteamError, extract_token, rating_score, steamid_from_token, token_expiry
 from .store import Cache, Config, Game, is_stale
 
 WEB_DIR = Path(__file__).with_name("web")
+BATCH = 100  # games per IStoreBrowseService request
 IDLE_TIMEOUT = 120  # seconds without the page polling before we quit (browser-tab mode)
 
 
@@ -74,6 +75,9 @@ class Library:
             "metacritic": g.metacritic,
             "desc": g.short_desc,
             "header": g.header_image,
+            "capsule": g.assets.get("capsule", ""),
+            "hero": g.assets.get("hero", ""),
+            "logo": g.assets.get("logo", ""),
             "positive": g.positive,
             "negative": g.negative,
             "reviews": g.total_reviews,
@@ -123,19 +127,65 @@ class Library:
         exp = token_expiry(self.cfg.family_token) if self.cfg.family_token else None
         return {**self.cfg.__dict__, "token_expires": exp}
 
-    def save_settings(self, data: dict) -> str | None:
+    @staticmethod
+    def make_config(data: dict) -> tuple[Config, str | None]:
         cfg = Config(**{k: str(data.get(k, "")).strip() for k in ("api_key", "steam_id", "family_token")})
-        tok = cfg.family_token.strip().strip('"')
-        m = re.search(r'"webapi_token"\s*:\s*"([^"]+)"', cfg.family_token)
-        if m:  # whole JSON pasted
-            tok = m.group(1)
-        cfg.family_token = tok
-        if not cfg.steam_id and tok:
-            cfg.steam_id = steamid_from_token(tok) or ""
+        if cfg.family_token:
+            cfg.family_token = extract_token(cfg.family_token)
+            if not steamid_from_token(cfg.family_token):
+                return cfg, ("That doesn't look like a Steam access token. Copy the whole "
+                             "ajaxgetasyncconfig page (it should contain \"webapi_token\").")
+            tok_sid = steamid_from_token(cfg.family_token)
+            if not cfg.steam_id or cfg.steam_id == tok_sid:
+                cfg.steam_id = tok_sid or ""
         if not (cfg.api_key or cfg.family_token):
-            return "Enter an API key or a store access token."
+            return cfg, "Enter an access token or an API key."
         if not cfg.steam_id:
-            return "Enter your Steam ID or profile link."
+            return cfg, "Enter your Steam ID or profile link."
+        return cfg, None
+
+    def test_settings(self, data: dict) -> list[dict]:
+        """Run each step against Steam and report what happened (for the Settings dialog)."""
+        cfg, err = self.make_config(data)
+        if err:
+            return [{"ok": False, "msg": err}]
+        out = []
+        client = self.client_factory(cfg.api_key, cfg.family_token)
+        if cfg.family_token:
+            exp = token_expiry(cfg.family_token)
+            if exp and exp < time.time():
+                out.append({"ok": False, "msg": "Access token has expired. Grab a fresh one."})
+            else:
+                hrs = f", valid for {max(0, int((exp - time.time()) // 3600))} more hours" if exp else ""
+                out.append({"ok": True, "msg": f"Access token belongs to SteamID {steamid_from_token(cfg.family_token)}{hrs}."})
+        try:
+            sid = client.resolve_steamid(cfg.steam_id)
+            out.append({"ok": True, "msg": f"Steam ID: {sid}"})
+            n = len(client.owned_games(sid))
+            out.append({"ok": True, "msg": f"Your library: {n:,} games."})
+        except SteamError as e:
+            out.append({"ok": False, "msg": f"Your library: {e}"})
+            return out
+        if cfg.family_token:
+            try:
+                fam = client.family_games(sid)
+                owners = len({o for f in fam for o in f["owners"]})
+                out.append({"ok": True, "msg": f"Steam Family: {len(fam):,} extra games shared by {owners} member(s)."})
+            except SteamError as e:
+                out.append({"ok": False, "msg": f"Steam Family: {e}"})
+        else:
+            out.append({"ok": False, "msg": "Steam Family: no access token set, so family games are skipped."})
+        try:
+            got = client.store_items([620], {})
+            out.append({"ok": bool(got), "msg": "Store data (ratings, tags, art): fast batch API works." if got else "Store data: batch API returned nothing."})
+        except SteamError as e:
+            out.append({"ok": False, "msg": f"Store data batch API: {e} (will use slow fallback)."})
+        return out
+
+    def save_settings(self, data: dict) -> str | None:
+        cfg, err = self.make_config(data)
+        if err:
+            return err
         with self.lock:
             self.cfg = cfg
             cfg.save()
@@ -212,13 +262,84 @@ class Library:
         self.stop = threading.Event()
         with self.lock:
             gs = sorted(self.games.values(), key=lambda g: (-g.playtime, -g.last_played, g.name.lower()))
-        # Unknown games first (most played first), then stale ones.
-        need_r = [g.appid for g in gs if not g.reviews_ts] + [g.appid for g in gs if g.reviews_ts and is_stale(g.reviews_ts)]
-        need_d = [g.appid for g in gs if not g.details_ts] + [g.appid for g in gs if g.details_ts and is_stale(g.details_ts)]
-        client = self.client()
-        for kind, ids, fetch in (("reviews", need_r, client.app_reviews), ("details", need_d, client.app_details)):
-            if ids:
-                threading.Thread(target=self._enrich, args=(kind, ids, fetch, self.stop), daemon=True).start()
+        # Unknown games first (most played first), then stale ones. Games cached by
+        # older versions (no cover-art info) are refreshed too - it's cheap now.
+        fresh = [g.appid for g in gs if not g.details_ts or not g.reviews_ts or not g.assets]
+        stale = [g.appid for g in gs if g.appid not in set(fresh) and (is_stale(g.details_ts) or is_stale(g.reviews_ts))]
+        ids = fresh + stale
+        if ids:
+            threading.Thread(target=self._enrich_batched, args=(ids, self.client(), self.stop), daemon=True).start()
+
+    def _apply_details(self, appid: int, d: dict | None) -> None:
+        self.cache.save_details(appid, d)
+        g = self.games.get(appid)
+        if g:
+            d = d or {}
+            g.type = d.get("type", "")
+            g.genres = d.get("genres", [])
+            g.categories = d.get("categories", [])
+            g.release = d.get("release", "")
+            g.release_sort = d.get("release_sort", "")
+            g.metacritic = d.get("metacritic")
+            g.short_desc = d.get("short_desc", "")
+            g.header_image = d.get("header_image", "")
+            g.assets = d.get("assets") or {}
+            g.details_ts = int(time.time())
+
+    def _apply_reviews(self, appid: int, r: dict) -> None:
+        self.cache.save_reviews(appid, r)
+        g = self.games.get(appid)
+        if g:
+            g.positive, g.negative, g.review_desc = r["positive"], r["negative"], r["review_desc"]
+            g.reviews_ts = int(time.time())
+
+    def _enrich_batched(self, appids: list[int], client: SteamClient, stop: threading.Event) -> None:
+        """Ratings, tags, release dates and cover art for 100 games per request."""
+        with self.lock:
+            tags = self.cache.load_tags()
+        try:
+            fetched = client.tag_names()
+            if fetched:
+                tags = fetched
+                with self.lock:
+                    self.cache.save_tags(tags)
+        except SteamError:
+            pass  # use cached tag names
+        failures = 0
+        i = 0
+        while i < len(appids):
+            if stop.is_set():
+                return
+            chunk = appids[i:i + BATCH]
+            try:
+                res = client.store_items(chunk, tags)
+            except SteamError as e:
+                failures += 1
+                if failures >= 3:
+                    self.set_status(f"Steam's fast batch API failed ({e}); falling back to the slow per-game lookup.", "warn")
+                    self._start_slow(appids[i:], client, stop)
+                    return
+                stop.wait(3 * failures)
+                continue  # retry the same batch
+            failures = 0
+            i += BATCH
+            if stop.is_set():
+                return
+            with self.lock:
+                for appid in chunk:
+                    item = res.get(appid)
+                    if item is None:  # not on the store (delisted, region locked...)
+                        self._apply_details(appid, None)
+                        self._apply_reviews(appid, {"positive": 0, "negative": 0, "review_desc": ""})
+                    else:
+                        self._apply_details(appid, item["details"])
+                        self._apply_reviews(appid, item["reviews"])
+                    self._touch(appid)
+                self.cache.commit()
+
+    def _start_slow(self, appids: list[int], client: SteamClient, stop: threading.Event) -> None:
+        for kind, fetch in (("reviews", client.app_reviews), ("details", client.app_details)):
+            threading.Thread(target=self._enrich, args=(kind, appids, fetch, stop), daemon=True).start()
 
     def _enrich(self, kind: str, appids: list[int], fetch, stop: threading.Event) -> None:
         for appid in appids:
@@ -231,25 +352,10 @@ class Library:
             if stop.is_set():
                 return
             with self.lock:
-                g = self.games.get(appid)
                 if kind == "reviews":
-                    self.cache.save_reviews(appid, data)
-                    if g:
-                        g.positive, g.negative, g.review_desc = data["positive"], data["negative"], data["review_desc"]
-                        g.reviews_ts = int(time.time())
+                    self._apply_reviews(appid, data)
                 else:
-                    self.cache.save_details(appid, data)
-                    if g:
-                        d = data or {}
-                        g.type = d.get("type", "")
-                        g.genres = d.get("genres", [])
-                        g.categories = d.get("categories", [])
-                        g.release = d.get("release", "")
-                        g.release_sort = d.get("release_sort", "")
-                        g.metacritic = d.get("metacritic")
-                        g.short_desc = d.get("short_desc", "")
-                        g.header_image = d.get("header_image", "")
-                        g.details_ts = int(time.time())
+                    self._apply_details(appid, data)
                 self.cache.commit()
                 self._touch(appid)
 
@@ -314,6 +420,8 @@ def make_handler(lib: Library, token: str, port_ref: list):
             if self.path == "/api/settings":
                 err = lib.save_settings(data)
                 return self._json({"ok": not err, "error": err})
+            if self.path == "/api/test":
+                return self._json({"results": lib.test_settings(data)})
             if self.path == "/api/refresh":
                 lib.refresh()
                 return self._json({"ok": True})
