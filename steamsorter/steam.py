@@ -140,10 +140,13 @@ CATEGORY_NAMES = {
 # EStoreAppType; 0 (game) is the protobuf default, so it is usually omitted.
 STORE_APP_TYPES = {0: "game", 1: "demo", 2: "mod", 3: "video", 4: "dlc", 5: "music", 6: "video", 7: "video"}
 ASSET_CDN = "https://shared.fastly.steamstatic.com/store_item_assets/"
-STORE_DATA_VERSION = 2  # bump to make cached store data refresh once
+STORE_DATA_VERSION = 3  # bump to make cached store data refresh once
 # steam_deck_compat_category
 DECK = {1: "unsupported", 2: "playable", 3: "verified"}
 PROTONDB = "https://www.protondb.com/api/v1/reports/summaries/{}.json"
+PCGW_API = "https://www.pcgamingwiki.com/w/api.php"
+# Values PCGamingWiki uses for "this game supports it" (others: false, unknown, n/a, hackable).
+PCGW_YES = ("true", "limited")
 
 
 def store_item_appid(it: dict) -> int:
@@ -159,12 +162,13 @@ def store_item_appid(it: dict) -> int:
     return 0
 
 
-def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
+def parse_store_item(it: dict, tag_names: dict[int, str], cat_names: dict[int, str] | None = None) -> dict:
     """Turn an IStoreBrowseService StoreItem into our details+reviews dicts."""
     t = it.get("type", 0)
     tags = sorted(it.get("tags") or [], key=lambda x: -int(x.get("weight", 0)))
     tag_ids = [int(x["tagid"]) for x in tags] or [int(x) for x in it.get("tagids") or []]
     tag_list = [tag_names[i] for i in tag_ids if i in tag_names][:8]
+    names = {**CATEGORY_NAMES, **(cat_names or {})}
     cats = it.get("categories") or {}
     cat_ids = []
     for k in ("supported_player_categoryids", "feature_categoryids", "controller_categoryids"):
@@ -187,7 +191,7 @@ def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
     details = {
         "type": STORE_APP_TYPES.get(int(t), "other"),
         "genres": tag_list,
-        "categories": [CATEGORY_NAMES[c] for c in dict.fromkeys(cat_ids) if c in CATEGORY_NAMES],
+        "categories": [names[c] for c in dict.fromkeys(int(x) for x in cat_ids) if c in names],
         "release": f"{release.day} {release:%b %Y}" if release else "",
         "release_sort": release.strftime("%Y-%m-%d") if release else "",
         "metacritic": None,
@@ -332,7 +336,58 @@ class SteamClient:
         data = http_json(f"{STORE}/tagdata/populartags/english")
         return {int(t["tagid"]): t["name"] for t in data or [] if "tagid" in t}
 
-    def store_items(self, appids: list[int], tag_names: dict[int, str]) -> dict[int, dict]:
+    def store_categories(self) -> dict[int, str]:
+        """Steam's own list of store categories (incl. controller ones like
+        PlayStation/DualSense support), so we don't depend on hardcoded ids."""
+        data = http_json(f"{API}/IStoreBrowseService/GetStoreCategories/v1/",
+                         {"input_json": json.dumps({"language": "english"})})
+        r = (data or {}).get("response") or {}
+        out = {}
+        for c in r.get("categories") or []:
+            cid = c.get("categoryid", c.get("id"))
+            name = c.get("display_name") or c.get("name")
+            if cid is not None and name:
+                out[int(cid)] = str(name)
+        return out
+
+    def pcgw_dualsense(self) -> dict:
+        """Ask PCGamingWiki which games support DualSense adaptive triggers and
+        haptics. Field names are discovered from the wiki's schema at runtime."""
+        meta = http_json(PCGW_API, {"action": "cargofields", "table": "Input", "format": "json"})
+        fields = list((meta or {}).get("cargofields") or {})
+        if not fields:
+            raise SteamError("PCGamingWiki returned no Input fields")
+        norm = {f: re.sub(r"[^a-z]", "", f.lower()) for f in fields}
+        trig = next((f for f, n in norm.items() if "adaptivetrigger" in n), None)
+        hapt = next((f for f, n in norm.items() if "dualsense" in n and "haptic" in n), None)
+        if not trig and not hapt:
+            raise SteamError("PCGamingWiki has no DualSense fields (looked for adaptive triggers / haptics)")
+        out = {"fields": [f for f in (trig, hapt) if f], "triggers": set(), "haptics": set()}
+        for key, field in (("triggers", trig), ("haptics", hapt)):
+            if not field:
+                continue
+            where = " OR ".join(f'Input.{field}="{v}"' for v in PCGW_YES)
+            offset = 0
+            while True:
+                data = http_json(PCGW_API, {
+                    "action": "cargoquery", "tables": "Infobox_game,Input",
+                    "join_on": "Infobox_game._pageID=Input._pageID",
+                    "fields": "Infobox_game.Steam_AppID=appids", "where": where,
+                    "limit": 500, "offset": offset, "format": "json",
+                }, timeout=60)
+                if "error" in (data or {}):
+                    raise SteamError(f"PCGamingWiki query failed: {data['error'].get('info', data['error'])}")
+                rows = (data or {}).get("cargoquery") or []
+                for row in rows:
+                    for a in re.findall(r"\d+", str((row.get("title") or {}).get("appids") or "")):
+                        out[key].add(int(a))
+                if len(rows) < 500 or offset > 20000:
+                    break
+                offset += 500
+        return out
+
+    def store_items(self, appids: list[int], tag_names: dict[int, str],
+                    cat_names: dict[int, str] | None = None) -> dict[int, dict]:
         req = {
             "ids": [{"appid": a} for a in appids],
             "context": {"language": "english", "country_code": "US", "steam_realm": 1},
@@ -359,7 +414,7 @@ class SteamClient:
                 out[appid] = None  # delisted / not on the store
                 continue
             try:
-                out[appid] = parse_store_item(it, tag_names)
+                out[appid] = parse_store_item(it, tag_names, cat_names)
             except (TypeError, ValueError, KeyError, AttributeError):
                 continue  # odd entry: leave it for the slow per-game lookup next time
         return out

@@ -285,6 +285,7 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
 .tag { padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,.05); font-size: 12px; color: #c5ccda; border: 1px solid var(--line); }
 .tag.g { background: rgba(124,92,255,.14); border-color: rgba(124,92,255,.3); color: #d4cbff; cursor: pointer; }
 .tag.g:hover { background: rgba(124,92,255,.28); }
+.tag.ds { background: rgba(34,211,238,.12); border-color: rgba(34,211,238,.35); color: #a5f3fc; }
 .lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin: 0 0 8px; }
 
 /* roulette */
@@ -428,6 +429,10 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
       <h4>Tags <button id="clrGenres" hidden>Clear</button></h4>
       <div class="chips" id="genres"></div>
     </div>
+    <div class="sec" id="ctrlSec" hidden>
+      <h4>Controller <button id="clrCtrl" hidden>Clear</button></h4>
+      <div class="chips" id="ctrl"></div>
+    </div>
     <div class="sec">
       <h4>Features <button id="clrFeats" hidden>Clear</button></h4>
       <div class="chips" id="feats"></div>
@@ -470,7 +475,7 @@ const S = {
   hideBorked: store.get("hideBorked", true),
   family: false, status: "", statusLevel: "info", alertDismissed: false,
   view: store.get("view", "grid"), sort: store.get("sort", "score"), desc: store.get("desc", true),
-  q: "", source: "all", played: "any", genres: new Set(), feats: new Set(),
+  q: "", source: "all", played: "any", genres: new Set(), feats: new Set(), ctrl: new Set(), pcgw: false,
   minRating: 0, minRev: 0, gamesOnly: true, preset: null, linuxMin: 0,
   list: [], shown: 0,
 };
@@ -482,6 +487,8 @@ const PRESETS = [
    f: {minRating: 90, minRev: 1, sort: "rating", desc: true, maxReviews: 5000}},
   {id: "linux", em: "🐧", t: "Runs great on Linux", d: "Native or ProtonDB Gold+",
    f: {linuxMin: 4, minRev: 1, sort: "score", desc: true}},
+  {id: "dualsense", em: "🎮", t: "DualSense showcase", d: "Adaptive triggers, best first", needs: "pcgw",
+   f: {ctrl: ["trig"], sort: "score", desc: true}},
   {id: "coop", em: "🤝", t: "Co-op night", d: "Games with online co-op",
    f: {feats: ["Online Co-op"], sort: "score", desc: true}},
   {id: "family", em: "👪", t: "Family vault", d: "Shared with you, best first",
@@ -498,6 +505,13 @@ const SORTS = [
 function color(p) {
   if (p == null) return "#5c6578";
   return p >= .85 ? "var(--good)" : p >= .7 ? "var(--ok)" : p >= .5 ? "var(--mid)" : "var(--bad)";
+}
+// Steam store categories that are about controllers go in their own sidebar section.
+const CTRL_RE = /playstation|dualsense|dualshock|\bps[345]\b|xbox|controller|steam input|gamepad/i;
+const DS_KEYS = {trig: ["🎯 Adaptive triggers", g => g.ds_triggers], hapt: ["📳 DualSense haptics", g => g.ds_haptics]};
+function ctrlMatch(g, key) {
+  if (DS_KEYS[key]) return DS_KEYS[key][1](g);
+  return g.categories.includes(key.slice(4));  // "cat:<name>"
 }
 const TIER_RANK = {native: 6, platinum: 5, gold: 4, silver: 3, bronze: 2, borked: 1};
 const DECK_LABEL = {verified: "✅ Verified", playable: "🟡 Playable", unsupported: "⛔ Unsupported"};
@@ -528,6 +542,7 @@ function matches(g, maxReviews) {
   if (maxReviews && (g.reviews ?? 0) > maxReviews) return false;
   for (const x of S.genres) if (!g.genres.includes(x)) return false;
   for (const x of S.feats) if (!g.categories.includes(x)) return false;
+  for (const x of S.ctrl) if (!ctrlMatch(g, x)) return false;
   if (S.linuxMin && (TIER_RANK[linuxTier(g)] || 0) < S.linuxMin) return false;
   if (S.linuxMin === 0 && S.hideBorked && g.proton === "borked" && !g.linux) return false;
   return true;
@@ -747,7 +762,16 @@ function renderFacets() {
   }
   const chip = (set, [name, n]) => `<button class="chip ${set.has(name) ? "on" : ""}" data-v="${esc(name)}">${esc(name)}<span class="n">${n}</span></button>`;
   const sortC = m => [...m].sort((a, b) => b[1] - a[1]);
-  const G = sortC(gc), F = sortC(fc).filter(([n]) => !/^(Steam Trading Cards|Steam Cloud|Includes level editor|Stats|Remote Play on Phone|Remote Play on Tablet|Steam Leaderboards|Valve Anti-Cheat enabled|In-App Purchases|Captions available|Commentary available|Includes Source SDK|Steam Workshop|Steam Turn Notifications|Family Sharing|SteamVR Collectibles|HDR available|Steam Timeline|Tracked Controller Support|Profile Features Limited|Mods|Mods \(require HL2\))$/.test(n));
+  const C = sortC(fc).filter(([n]) => CTRL_RE.test(n));
+  const dsCount = k => [...S.games.values()].filter(g => DS_KEYS[k][1](g) && (!S.gamesOnly || !g.type || g.type === "game")).length;
+  const cchips = [];
+  if (S.pcgw) for (const k of ["trig", "hapt"]) cchips.push([k, DS_KEYS[k][0], dsCount(k)]);
+  for (const [n, c] of C) cchips.push(["cat:" + n, n, c]);
+  for (const k of S.ctrl) if (!cchips.find(c => c[0] === k)) cchips.push([k, DS_KEYS[k] ? DS_KEYS[k][0] : k.slice(4), 0]);
+  $("#ctrlSec").hidden = !cchips.length;
+  $("#ctrl").innerHTML = cchips.map(([k, label, n]) => `<button class="chip ${S.ctrl.has(k) ? "on" : ""}" data-v="${esc(k)}">${esc(label)}<span class="n">${n}</span></button>`).join("");
+  $("#clrCtrl").hidden = !S.ctrl.size;
+  const G = sortC(gc), F = sortC(fc).filter(([n]) => !CTRL_RE.test(n)).filter(([n]) => !/^(Steam Trading Cards|Steam Cloud|Includes level editor|Stats|Remote Play on Phone|Remote Play on Tablet|Steam Leaderboards|Valve Anti-Cheat enabled|In-App Purchases|Captions available|Commentary available|Includes Source SDK|Steam Workshop|Steam Turn Notifications|Family Sharing|SteamVR Collectibles|HDR available|Steam Timeline|Tracked Controller Support|Profile Features Limited|Mods|Mods \(require HL2\))$/.test(n));
   const showAllF = S._allFeats;
   const Fs = showAllF ? F : F.slice(0, 14);
   for (const x of S.feats) if (!Fs.find(f => f[0] === x)) Fs.push([x, fc.get(x) || 0]);
@@ -764,7 +788,7 @@ function renderFacets() {
   if (m) m.onclick = e => { e.stopPropagation(); S._allFeats = !S._allFeats; renderFacets(); };
 }
 function renderPresets() {
-  $("#presets").innerHTML = PRESETS.filter(p => p.id !== "family" || S.family).map(p =>
+  $("#presets").innerHTML = PRESETS.filter(p => (p.id !== "family" || S.family) && (p.needs !== "pcgw" || S.pcgw)).map(p =>
     `<button class="preset ${S.preset === p.id ? "on" : ""}" data-id="${p.id}"><span class="em">${p.em}</span><span><b>${p.t}</b><small>${p.d}</small></span></button>`).join("");
 }
 function syncControls() {
@@ -785,13 +809,13 @@ function updateRangeLabels() {
   $("#minRevV").textContent = +rv.value ? fmt(REV_STEPS[rv.value]) + "+" : "Any";
 }
 window.resetFilters = function () {
-  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, preset: null, linuxMin: 0});
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), ctrl: new Set(), minRating: 0, minRev: 0, gamesOnly: true, preset: null, linuxMin: 0});
   syncControls(); render();
 };
 function applyPreset(id) {
   if (S.preset === id) return resetFilters();
   const p = PRESETS.find(x => x.id === id);
-  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, linuxMin: 0});
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), ctrl: new Set(), minRating: 0, minRev: 0, gamesOnly: true, linuxMin: 0});
   const f = p.f;
   if (f.played) S.played = f.played;
   if (f.source) S.source = f.source;
@@ -799,6 +823,7 @@ function applyPreset(id) {
   if (f.minRev != null) S.minRev = f.minRev;
   if (f.feats) S.feats = new Set(f.feats);
   if (f.linuxMin) S.linuxMin = f.linuxMin;
+  if (f.ctrl) S.ctrl = new Set(f.ctrl);
   S.sort = f.sort; S.desc = f.desc;
   S.preset = id;
   syncControls(); render();
@@ -841,7 +866,13 @@ function showGame(id) {
         </div>
         <p class="desc">${esc(g.desc) || (g.has_details ? "<i>No description on the store.</i>" : "<i>Fetching details…</i>")}</p>
         ${g.genres.length ? `<div class="lbl">Tags</div><div class="taglist">${g.genres.map(x => `<span class="tag g" data-genre="${esc(x)}">${esc(x)}</span>`).join("")}</div>` : ""}
-        ${g.categories.length ? `<div class="lbl">Features</div><div class="taglist">${g.categories.map(x => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
+        ${(() => {
+          const c = g.categories.filter(x => CTRL_RE.test(x)).map(x => `<span class="tag">${esc(x)}</span>`);
+          if (g.ds_triggers) c.unshift(`<span class="tag ds">🎯 DualSense adaptive triggers</span>`);
+          if (g.ds_haptics) c.splice(g.ds_triggers ? 1 : 0, 0, `<span class="tag ds">📳 DualSense haptics</span>`);
+          return c.length ? `<div class="lbl">Controller</div><div class="taglist">${c.join("")}</div>` : "";
+        })()}
+        ${g.categories.some(x => !CTRL_RE.test(x)) ? `<div class="lbl">Features</div><div class="taglist">${g.categories.filter(x => !CTRL_RE.test(x)).map(x => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <div>
         <div class="actions" style="margin-bottom:18px">
@@ -998,6 +1029,7 @@ async function poll(force = false) {
   catch { pollTimer = setTimeout(poll, 3000); return; }
   const wasConfigured = S.configured;
   S.configured = st.configured; S.loading = st.loading; S.progress = st.progress; S.family = st.family;
+  if (st.pcgw !== S.pcgw) { S.pcgw = st.pcgw; renderPresets(); clearTimeout(facetTimer); facetTimer = setTimeout(renderFacets, 300); }
   let structural = st.full || !S.games.size;
   if (st.full) S.games.clear();
   if (st.appids) {
@@ -1059,6 +1091,11 @@ $("#feats").addEventListener("click", e => {
   const v = b.dataset.v; S.feats.has(v) ? S.feats.delete(v) : S.feats.add(v); renderFacets(); filterChanged();
 });
 $("#clrGenres").onclick = () => { S.genres.clear(); renderFacets(); filterChanged(); };
+$("#ctrl").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b || !b.dataset.v) return;
+  const v = b.dataset.v; S.ctrl.has(v) ? S.ctrl.delete(v) : S.ctrl.add(v); renderFacets(); filterChanged();
+});
+$("#clrCtrl").onclick = () => { S.ctrl.clear(); renderFacets(); filterChanged(); };
 $("#clrFeats").onclick = () => { S.feats.clear(); renderFacets(); filterChanged(); };
 for (const [id, key] of [["#segSource", "source"], ["#segPlayed", "played"]]) {
   $(id).addEventListener("click", e => {

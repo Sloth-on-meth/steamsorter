@@ -15,6 +15,7 @@ from .steam import STORE_DATA_VERSION, SteamClient, SteamError, extract_token, r
 from .store import Cache, Config, Game, is_stale
 
 WEB_DIR = Path(__file__).with_name("web")
+PCGW_STALE = 7 * 24 * 3600  # PCGamingWiki DualSense data
 PROTON_STALE = 14 * 24 * 3600  # ProtonDB ratings move faster than store data
 BATCH = 100  # games per IStoreBrowseService request
 IDLE_TIMEOUT = 120  # seconds without the page polling before we quit (browser-tab mode)
@@ -49,6 +50,8 @@ class Library:
         self.games: dict[int, Game] = {g.appid: g for g in self.cache.load_library()}
         self.rev = 1
         self.game_rev: dict[int, int] = {a: 1 for a in self.games}
+        self.pcgw = self.cache.load_pcgw()
+        self.pcgw_error = ""  # {"triggers": {appid,...}, "haptics": {...}}
         self.status = ""
         self.status_level = "info"
         self.loading = False
@@ -84,6 +87,8 @@ class Library:
             "proton": g.proton,
             "proton_total": g.proton_total,
             "has_proton": bool(g.proton_ts),
+            "ds_triggers": g.appid in self.pcgw.get("triggers", ()),
+            "ds_haptics": g.appid in self.pcgw.get("haptics", ()),
             "positive": g.positive,
             "negative": g.negative,
             "reviews": g.total_reviews,
@@ -119,6 +124,7 @@ class Library:
                 "loading": self.loading,
                 "configured": bool(self.cfg.steam_id and (self.cfg.api_key or self.cfg.family_token)),
                 "family": bool(self.cfg.family_token),
+                "pcgw": bool(self.pcgw.get("triggers") or self.pcgw.get("haptics")),
                 "version": __version__,
             }
 
@@ -184,6 +190,19 @@ class Library:
                 out.append({"ok": False, "msg": f"Steam Family: {e}"})
         else:
             out.append({"ok": False, "msg": "Steam Family: no access token set, so family games are skipped."})
+        try:
+            cats = client.store_categories()
+            pad = [n for n in cats.values() if re.search(r"playstation|dualsense|dualshock|ps[45]", n, re.I)]
+            out.append({"ok": bool(cats), "msg": f"Steam store categories: {len(cats)} known"
+                        + (f"; controller ones: {', '.join(pad)}" if pad else "; no PlayStation/DualSense categories found")})
+        except SteamError as e:
+            out.append({"ok": False, "msg": f"Steam store categories: {e} (using built-in list)"})
+        try:
+            ds = client.pcgw_dualsense()
+            out.append({"ok": True, "msg": f"PCGamingWiki: {len(ds['triggers']):,} games with DualSense adaptive triggers, "
+                        f"{len(ds['haptics']):,} with DualSense haptics (fields: {', '.join(ds['fields'])})."})
+        except SteamError as e:
+            out.append({"ok": False, "msg": f"PCGamingWiki DualSense data: {e}"})
         try:
             got = client.store_items([620], {})
             out.append({"ok": bool(got), "msg": "Store data (ratings, tags, art): fast batch API works." if got else "Store data: batch API returned nothing."})
@@ -284,6 +303,23 @@ class Library:
         else:
             store_done.set()
         threading.Thread(target=self._enrich_proton, args=(client, self.stop, store_done), daemon=True).start()
+        with self.lock:
+            pcgw_age = time.time() - int(self.cache.get_meta("pcgw_ts", "0") or 0)
+        if pcgw_age > PCGW_STALE or not self.pcgw:
+            threading.Thread(target=self._load_pcgw, args=(client,), daemon=True).start()
+
+    def _load_pcgw(self, client: SteamClient) -> None:
+        try:
+            res = client.pcgw_dualsense()
+        except Exception as e:
+            self.pcgw_error = str(e)
+            return  # keep whatever is cached; the DualSense filters just stay hidden
+        features = {"triggers": res["triggers"], "haptics": res["haptics"]}
+        with self.lock:
+            self.cache.save_pcgw(features)
+            self.pcgw = features
+            self.rev += 1
+            self.game_rev = {a: self.rev for a in self.games}  # resend everything
 
     def _enrich_proton(self, client: SteamClient, stop: threading.Event, store_done: threading.Event) -> None:
         """ProtonDB has no batch API: one request per game, best-rated games first."""
@@ -358,6 +394,15 @@ class Library:
         """Ratings, tags, release dates and cover art for 100 games per request."""
         with self.lock:
             tags = self.cache.load_tags()
+            cats = self.cache.load_categories()
+        try:
+            fetched_cats = client.store_categories()
+            if fetched_cats:
+                cats = fetched_cats
+                with self.lock:
+                    self.cache.save_categories(cats)
+        except Exception:
+            pass  # cached names, else the built-in list
         try:
             fetched = client.tag_names()
             if fetched:
@@ -373,7 +418,7 @@ class Library:
                 return
             chunk = appids[i:i + BATCH]
             try:
-                res = client.store_items(chunk, tags)
+                res = client.store_items(chunk, tags, cats)
             except Exception as e:  # never let this thread die: retry, then fall back
                 failures += 1
                 if failures >= 3:

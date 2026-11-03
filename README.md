@@ -9,8 +9,10 @@ Hit **Pick something for me** and spin the roulette.
 - **Linux-first**: every game shows its **ProtonDB** rating (Platinum/Gold/Silver/
   Bronze/Borked) or a 🐧 *Native* badge, plus Steam Deck Verified/Playable. You can
   filter by minimum tier, sort by it, and borked games are hidden by default.
+- **Controller filters**: DualSense **adaptive triggers** and **haptics** (from
+  PCGamingWiki), plus Steam's own PlayStation/Xbox/controller support categories.
 - One-click **Quick picks**: Best unplayed, Hidden gems, Runs great on Linux,
-  Co-op night, Family vault, Forgotten favourites.
+  DualSense showcase, Co-op night, Family vault, Forgotten favourites.
 - Each game page uses its Steam library hero art, shows ratings and stats, and has a Play button that launches it in Steam.
 - Pure Python standard library, nothing to `pip install`. Works on Linux and Windows.
 - Everything is cached locally, so later launches are instant.
@@ -67,10 +69,16 @@ talk to it.
    (best-rated games first, about 8 per second) and cached for 14 days. Native
    Linux and Steam Deck status come from Steam with the rest of the store data.
 
+4. DualSense adaptive-trigger and haptics support come from PCGamingWiki's
+   database (a few bulk queries, refreshed weekly). Steam itself doesn't track
+   them. The wiki is community-maintained, so it's good but not complete. Steam's
+   controller categories (PlayStation controller support etc.) come from Steam's
+   own category list, so their names match what the store shows.
+
 ### Troubleshooting
 
 Open **Settings → Test connection**. It checks each step (token, your library,
-Steam Family, store data) and shows exactly what Steam answered. Family problems
+Steam Family, store data, PCGamingWiki) and shows exactly what each service answered. Family problems
 are almost always an expired token, or a token copied while logged in as a
 different account.
 

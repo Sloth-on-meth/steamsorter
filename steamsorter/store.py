@@ -110,6 +110,19 @@ CREATE TABLE IF NOT EXISTS apps (
     proton_total INTEGER DEFAULT 0,
     proton_ts INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS categories (
+    catid INTEGER PRIMARY KEY,
+    name TEXT
+);
+CREATE TABLE IF NOT EXISTS pcgw (
+    appid INTEGER,
+    feature TEXT,
+    PRIMARY KEY (appid, feature)
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS tags (
     tagid INTEGER PRIMARY KEY,
     name TEXT
@@ -221,6 +234,35 @@ class Cache:
 
     def load_tags(self) -> dict[int, str]:
         return dict(self.db.execute("SELECT tagid, name FROM tags").fetchall())
+
+    # ---- store category names --------------------------------------------
+    def save_categories(self, cats: dict[int, str]) -> None:
+        with self.db:
+            self.db.executemany("INSERT OR REPLACE INTO categories VALUES (?,?)", cats.items())
+
+    def load_categories(self) -> dict[int, str]:
+        return dict(self.db.execute("SELECT catid, name FROM categories").fetchall())
+
+    # ---- PCGamingWiki features (DualSense adaptive triggers, haptics) ------
+    def save_pcgw(self, features: dict[str, set[int]]) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM pcgw")
+            for feature, ids in features.items():
+                self.db.executemany("INSERT OR IGNORE INTO pcgw VALUES (?,?)", [(a, feature) for a in ids])
+            self.set_meta("pcgw_ts", str(int(time.time())))
+
+    def load_pcgw(self) -> dict[str, set[int]]:
+        out: dict[str, set[int]] = {}
+        for appid, feature in self.db.execute("SELECT appid, feature FROM pcgw"):
+            out.setdefault(feature, set()).add(appid)
+        return out
+
+    def get_meta(self, key: str, default: str = "") -> str:
+        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, value))
 
     # ---- persona names ----------------------------------------------------
     def save_names(self, names: dict[str, str]) -> None:

@@ -121,3 +121,39 @@ class StoreItemsResponse(unittest.TestCase):
         self.assertEqual(store_item_appid({"id": {"appid": 620}}), 620)
         self.assertEqual(store_item_appid({"appid": 70, "id": 70}), 70)
         self.assertEqual(store_item_appid({}), 0)
+
+
+class Controllers(unittest.TestCase):
+    def test_dynamic_category_names(self):
+        from steamsorter.steam import parse_store_item
+
+        it = {"appid": 1, "categories": {"controller_categoryids": [28, 9001]}}
+        d = parse_store_item(it, {}, {9001: "PS5 Controller Support"})["details"]
+        self.assertEqual(d["categories"], ["Full controller support", "PS5 Controller Support"])
+        # unknown ids are dropped without a name map
+        self.assertEqual(parse_store_item(it, {})["details"]["categories"], ["Full controller support"])
+
+    def test_pcgw_field_discovery(self):
+        from unittest import mock
+
+        from steamsorter.steam import SteamClient
+
+        calls = []
+
+        def fake(url, params=None, timeout=30):
+            calls.append(params)
+            if params["action"] == "cargofields":
+                return {"cargofields": {"Controller_support": {}, "DualSense_adaptive_trigger_support": {},
+                                        "DualSense_haptics": {}, "Haptic_feedback": {}}}
+            if "adaptive" in params["where"]:
+                return {"cargoquery": [{"title": {"appids": "1895880"}}, {"title": {"appids": "100,200"}}]}
+            return {"cargoquery": [{"title": {"appids": "1895880"}}]}
+
+        with mock.patch("steamsorter.steam.http_json", side_effect=fake):
+            r = SteamClient().pcgw_dualsense()
+        self.assertEqual(r["fields"], ["DualSense_adaptive_trigger_support", "DualSense_haptics"])
+        self.assertEqual(r["triggers"], {1895880, 100, 200})
+        self.assertEqual(r["haptics"], {1895880})
+        q = [c for c in calls if c["action"] == "cargoquery"][0]
+        self.assertIn('Input.DualSense_adaptive_trigger_support="true"', q["where"])
+        self.assertIn('="limited"', q["where"])
