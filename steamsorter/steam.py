@@ -19,7 +19,9 @@ UA = "SteamSorter/0.2 (+https://github.com/sloth-on-meth/steamsorter)"
 
 
 class SteamError(Exception):
-    pass
+    def __init__(self, msg: str, code: int = 0):
+        super().__init__(msg)
+        self.code = code
 
 
 class Throttle:
@@ -61,7 +63,7 @@ def http_json(url: str, params: dict | None = None, timeout: float = 30) -> dict
         hint = {401: " (token/key rejected - expired or wrong?)", 403: " (access denied - token/key wrong or expired?)",
                 429: " (rate limited)"}.get(e.code, "")
         endpoint = url.split("?")[0].replace(API + "/", "").replace(STORE + "/", "")
-        raise SteamError(f"HTTP {e.code}{hint} from {endpoint}" + (f": {body[:160]}" if body and "<" not in body[:1] else "")) from e
+        raise SteamError(f"HTTP {e.code}{hint} from {endpoint}" + (f": {body[:160]}" if body and "<" not in body[:1] else ""), e.code) from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise SteamError(f"Network error: {e}") from e
     try:
@@ -138,6 +140,23 @@ CATEGORY_NAMES = {
 # EStoreAppType; 0 (game) is the protobuf default, so it is usually omitted.
 STORE_APP_TYPES = {0: "game", 1: "demo", 2: "mod", 3: "video", 4: "dlc", 5: "music", 6: "video", 7: "video"}
 ASSET_CDN = "https://shared.fastly.steamstatic.com/store_item_assets/"
+STORE_DATA_VERSION = 2  # bump to make cached store data refresh once
+# steam_deck_compat_category
+DECK = {1: "unsupported", 2: "playable", 3: "verified"}
+PROTONDB = "https://www.protondb.com/api/v1/reports/summaries/{}.json"
+
+
+def store_item_appid(it: dict) -> int:
+    """StoreItem 'id' is a plain number; older/other shapes nest it as {'appid': n}."""
+    for v in (it.get("appid"), it.get("id")):
+        if isinstance(v, dict):
+            v = v.get("appid")
+        try:
+            if v and int(v) > 0:
+                return int(v)
+        except (TypeError, ValueError):
+            pass
+    return 0
 
 
 def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
@@ -160,6 +179,7 @@ def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
         f = a.get(key)
         return ASSET_CDN + fmt.replace("${FILENAME}", f) if f and fmt else ""
 
+    plat = it.get("platforms") or {}
     rv = ((it.get("reviews") or {}).get("summary_filtered")) or {}
     count = int(rv.get("review_count") or 0)
     pct = int(rv.get("percent_positive") or 0)
@@ -173,7 +193,10 @@ def parse_store_item(it: dict, tag_names: dict[int, str]) -> dict:
         "metacritic": None,
         "short_desc": html.unescape((it.get("basic_info") or {}).get("short_description") or ""),
         "header_image": asset("header"),
-        "assets": {"capsule": asset("library_capsule"), "hero": asset("library_hero"), "logo": asset("library_logo") if a.get("library_logo") else ""},
+        "assets": {"capsule": asset("library_capsule"), "hero": asset("library_hero"),
+                   "logo": asset("library_logo") if a.get("library_logo") else "", "v": STORE_DATA_VERSION},
+        "linux": bool(plat.get("steamos_linux")),
+        "deck": DECK.get(int(plat.get("steam_deck_compat_category") or 0), ""),
     }
     reviews = {"positive": pos, "negative": count - pos, "review_desc": rv.get("review_score_label") or ""}
     return {"details": details, "reviews": reviews}
@@ -187,6 +210,7 @@ class SteamClient:
         self.details_throttle = Throttle(1.6)
         self.reviews_throttle = Throttle(0.35)
         self.batch_throttle = Throttle(0.3)
+        self.proton_throttle = Throttle(0.12)
 
     # ---- Web API -------------------------------------------------------
     def _auth(self, prefer_token: bool = False) -> dict:
@@ -314,7 +338,7 @@ class SteamClient:
             "context": {"language": "english", "country_code": "US", "steam_realm": 1},
             "data_request": {
                 "include_assets": True, "include_release": True, "include_reviews": True,
-                "include_basic_info": True, "include_tag_count": 20,
+                "include_basic_info": True, "include_tag_count": 20, "include_platforms": True,
             },
         }
         self.batch_throttle.wait()
@@ -323,15 +347,43 @@ class SteamClient:
         if items is None:
             raise SteamError("Unexpected response from IStoreBrowseService/GetItems")
         out = {}
-        for it in items:
-            appid = int(it.get("appid") or it.get("id", {}).get("appid", 0) or 0)
+        for n, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            appid = store_item_appid(it)
+            if not appid and len(items) == len(appids):
+                appid = appids[n]  # results come back in request order
             if not appid:
                 continue
-            if int(it.get("success", 1)) != 1 or not it.get("visible", True) and not it.get("name"):
+            if int(it.get("success", 1) or 1) != 1 or (not it.get("visible", True) and not it.get("name")):
                 out[appid] = None  # delisted / not on the store
                 continue
-            out[appid] = parse_store_item(it, tag_names)
+            try:
+                out[appid] = parse_store_item(it, tag_names)
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue  # odd entry: leave it for the slow per-game lookup next time
         return out
+
+    # ---- ProtonDB ------------------------------------------------------
+    def protondb(self, appid: int, stop: threading.Event | None = None) -> dict:
+        """ProtonDB community rating: tier is platinum/gold/silver/bronze/borked
+        (or '' when nobody has reported on the game yet)."""
+        for attempt in range(4):
+            self.proton_throttle.wait(stop)
+            try:
+                d = http_json(PROTONDB.format(appid), timeout=15) or {}
+            except SteamError as e:
+                if e.code == 404:
+                    return {"tier": "", "total": 0}
+                if e.code in (429, 503) or e.code >= 500:
+                    self.proton_throttle.backoff(10 * (attempt + 1))
+                    continue
+                raise
+            tier = d.get("tier") or ""
+            if tier == "pending":
+                tier = ""
+            return {"tier": tier, "total": int(d.get("total") or 0)}
+        raise SteamError("ProtonDB is rate limiting us")
 
     # ---- Store API, one game at a time (slow fallback) ----------------
     def _store(self, path: str, params: dict, throttle: Throttle, stop: threading.Event | None) -> dict:
@@ -368,6 +420,8 @@ class SteamClient:
             "metacritic": (d.get("metacritic") or {}).get("score"),
             "short_desc": d.get("short_description", ""),
             "header_image": d.get("header_image", ""),
+            "linux": bool((d.get("platforms") or {}).get("linux")),
+            "assets": {"v": STORE_DATA_VERSION},
         }
 
     def app_reviews(self, appid: int, stop: threading.Event | None = None) -> dict:

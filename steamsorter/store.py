@@ -64,6 +64,11 @@ class Game:
     short_desc: str = ""
     header_image: str = ""
     assets: dict = field(default_factory=dict)
+    linux: bool = False
+    deck: str = ""
+    proton: str = ""
+    proton_total: int = 0
+    proton_ts: int = 0
     details_ts: int = 0
     positive: int | None = None
     negative: int | None = None
@@ -98,7 +103,12 @@ CREATE TABLE IF NOT EXISTS apps (
     review_desc TEXT DEFAULT '',
     reviews_ts INTEGER DEFAULT 0,
     header_image TEXT DEFAULT '',
-    assets TEXT DEFAULT ''
+    assets TEXT DEFAULT '',
+    linux INTEGER DEFAULT 0,
+    deck TEXT DEFAULT '',
+    proton TEXT DEFAULT '',
+    proton_total INTEGER DEFAULT 0,
+    proton_ts INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tags (
     tagid INTEGER PRIMARY KEY,
@@ -124,9 +134,11 @@ class Cache:
         self.db = sqlite3.connect(str(path or config_dir() / "cache.sqlite3"), check_same_thread=False)
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(apps)")}
-        for col in ("header_image", "assets"):  # migrate older caches
-            if col not in cols:
-                self.db.execute(f"ALTER TABLE apps ADD COLUMN {col} TEXT DEFAULT ''")
+        for col, typ in (("header_image", "TEXT DEFAULT ''"), ("assets", "TEXT DEFAULT ''"),
+                         ("linux", "INTEGER DEFAULT 0"), ("deck", "TEXT DEFAULT ''"), ("proton", "TEXT DEFAULT ''"),
+                         ("proton_total", "INTEGER DEFAULT 0"), ("proton_ts", "INTEGER DEFAULT 0")):
+            if col not in cols:  # migrate caches from older versions
+                self.db.execute(f"ALTER TABLE apps ADD COLUMN {col} {typ}")
 
     def close(self) -> None:
         self.db.close()
@@ -148,7 +160,7 @@ class Cache:
             """SELECT l.appid, l.name, l.source, l.owners, l.playtime, l.last_played,
                       a.type, a.genres, a.categories, a.release, a.release_sort, a.metacritic,
                       a.short_desc, a.details_ts, a.positive, a.negative, a.review_desc, a.reviews_ts,
-                      a.header_image, a.assets
+                      a.header_image, a.assets, a.linux, a.deck, a.proton, a.proton_total, a.proton_ts
                FROM library l LEFT JOIN apps a ON a.appid = l.appid"""
         ).fetchall()
         games = []
@@ -162,6 +174,8 @@ class Cache:
                     short_desc=r[12] or "", details_ts=r[13] or 0, positive=r[14],
                     negative=r[15], review_desc=r[16] or "", reviews_ts=r[17] or 0,
                     header_image=r[18] or "", assets=json.loads(r[19] or "{}"),
+                    linux=bool(r[20]), deck=r[21] or "", proton=r[22] or "", proton_total=r[23] or 0,
+                    proton_ts=r[24] or 0,
                 )
             )
         return games
@@ -173,12 +187,14 @@ class Cache:
         self.db.execute("INSERT OR IGNORE INTO apps (appid) VALUES (?)", (appid,))
         self.db.execute(
             """UPDATE apps SET type=?, genres=?, categories=?, release=?, release_sort=?,
-                   metacritic=?, short_desc=?, header_image=?, assets=?, details_ts=? WHERE appid=?""",
+                   metacritic=?, short_desc=?, header_image=?, assets=?, linux=?, deck=?, details_ts=?
+               WHERE appid=?""",
             (
                 d.get("type", ""), json.dumps(d.get("genres", [])),
                 json.dumps(d.get("categories", [])), d.get("release", ""),
                 d.get("release_sort", ""), d.get("metacritic"), d.get("short_desc", ""),
-                d.get("header_image", ""), json.dumps(d.get("assets") or {}), now, appid,
+                d.get("header_image", ""), json.dumps(d.get("assets") or {}), int(bool(d.get("linux"))),
+                d.get("deck", ""), now, appid,
             ),
         )
 
@@ -189,6 +205,11 @@ class Cache:
             "UPDATE apps SET positive=?, negative=?, review_desc=?, reviews_ts=? WHERE appid=?",
             (r["positive"], r["negative"], r["review_desc"], now, appid),
         )
+
+    def save_proton(self, appid: int, p: dict) -> None:
+        self.db.execute("INSERT OR IGNORE INTO apps (appid) VALUES (?)", (appid,))
+        self.db.execute("UPDATE apps SET proton=?, proton_total=?, proton_ts=? WHERE appid=?",
+                        (p["tier"], p["total"], int(time.time()), appid))
 
     def commit(self) -> None:
         self.db.commit()

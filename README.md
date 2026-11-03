@@ -6,11 +6,14 @@ as a cover-art grid, and lets you sort and filter by user rating, genre, feature
 (co-op, controller support, ...), Steam user tags, playtime, release date and more. Still stuck?
 Hit **Pick something for me** and spin the roulette.
 
-- One-click **Quick picks**: Best unplayed, Hidden gems, Co-op night, Family vault,
-  Forgotten favourites.
+- **Linux-first**: every game shows its **ProtonDB** rating (Platinum/Gold/Silver/
+  Bronze/Borked) or a 🐧 *Native* badge, plus Steam Deck Verified/Playable. You can
+  filter by minimum tier, sort by it, and borked games are hidden by default.
+- One-click **Quick picks**: Best unplayed, Hidden gems, Runs great on Linux,
+  Co-op night, Family vault, Forgotten favourites.
 - Each game page uses its Steam library hero art, shows ratings and stats, and has a Play button that launches it in Steam.
 - Pure Python standard library, nothing to `pip install`. Works on Linux and Windows.
-- Ratings and genres are cached locally, so only the first run is slow.
+- Everything is cached locally, so later launches are instant.
 
 ## Run it
 
@@ -58,6 +61,11 @@ talk to it.
    a few thousand games load in under a minute. Everything is cached locally and
    refreshed after 30 days. If that API ever fails, the app falls back to the old
    per-game store endpoints, which are much slower (about 1.6 s per game).
+
+3. ProtonDB ratings come from `protondb.com/api/v1/reports/summaries/<appid>.json`.
+   There's no batch API, so they're fetched one game at a time in the background
+   (best-rated games first, about 8 per second) and cached for 14 days. Native
+   Linux and Steam Deck status come from Steam with the rest of the store data.
 
 ### Troubleshooting
 

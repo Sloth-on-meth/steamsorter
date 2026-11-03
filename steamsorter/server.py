@@ -11,10 +11,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import __version__
-from .steam import SteamClient, SteamError, extract_token, rating_score, steamid_from_token, token_expiry
+from .steam import STORE_DATA_VERSION, SteamClient, SteamError, extract_token, rating_score, steamid_from_token, token_expiry
 from .store import Cache, Config, Game, is_stale
 
 WEB_DIR = Path(__file__).with_name("web")
+PROTON_STALE = 14 * 24 * 3600  # ProtonDB ratings move faster than store data
 BATCH = 100  # games per IStoreBrowseService request
 IDLE_TIMEOUT = 120  # seconds without the page polling before we quit (browser-tab mode)
 
@@ -78,6 +79,11 @@ class Library:
             "capsule": g.assets.get("capsule", ""),
             "hero": g.assets.get("hero", ""),
             "logo": g.assets.get("logo", ""),
+            "linux": g.linux,
+            "deck": g.deck,
+            "proton": g.proton,
+            "proton_total": g.proton_total,
+            "has_proton": bool(g.proton_ts),
             "positive": g.positive,
             "negative": g.negative,
             "reviews": g.total_reviews,
@@ -90,10 +96,13 @@ class Library:
 
     def progress(self) -> dict:
         total = len(self.games)
+        playable = [g for g in self.games.values() if g.type in ("", "game")]
         return {
             "total": total,
             "reviews": sum(1 for g in self.games.values() if g.reviews_ts),
             "details": sum(1 for g in self.games.values() if g.details_ts),
+            "proton": sum(1 for g in playable if g.proton_ts),
+            "proton_total": len(playable),
         }
 
     def state(self, since: int = 0) -> dict:
@@ -264,11 +273,53 @@ class Library:
             gs = sorted(self.games.values(), key=lambda g: (-g.playtime, -g.last_played, g.name.lower()))
         # Unknown games first (most played first), then stale ones. Games cached by
         # older versions (no cover-art info) are refreshed too - it's cheap now.
-        fresh = [g.appid for g in gs if not g.details_ts or not g.reviews_ts or not g.assets]
+        fresh = [g.appid for g in gs
+                 if not g.details_ts or not g.reviews_ts or g.assets.get("v") != STORE_DATA_VERSION]
         stale = [g.appid for g in gs if g.appid not in set(fresh) and (is_stale(g.details_ts) or is_stale(g.reviews_ts))]
         ids = fresh + stale
+        store_done = threading.Event()
+        client = self.client()
         if ids:
-            threading.Thread(target=self._enrich_batched, args=(ids, self.client(), self.stop), daemon=True).start()
+            threading.Thread(target=self._enrich_batched, args=(ids, client, self.stop, store_done), daemon=True).start()
+        else:
+            store_done.set()
+        threading.Thread(target=self._enrich_proton, args=(client, self.stop, store_done), daemon=True).start()
+
+    def _enrich_proton(self, client: SteamClient, stop: threading.Event, store_done: threading.Event) -> None:
+        """ProtonDB has no batch API: one request per game, best-rated games first."""
+        store_done.wait(120)  # so we know ratings (for ordering) and which apps are DLC
+        if stop.is_set():
+            return
+        with self.lock:
+            todo = [g for g in self.games.values()
+                    if g.type in ("", "game") and (not g.proton_ts or time.time() - g.proton_ts > PROTON_STALE)]
+            todo.sort(key=lambda g: -(rating_score(g.positive, g.negative) or 0))
+            ids = [g.appid for g in todo]
+        errors = 0
+        for appid in ids:
+            if stop.is_set():
+                return
+            try:
+                p = client.protondb(appid, stop)
+                errors = 0
+            except Exception:
+                errors += 1
+                if errors >= 20:  # ProtonDB unreachable - try again next launch
+                    self.set_status("Couldn't reach ProtonDB; Linux ratings will be fetched next time.", "warn")
+                    return
+                continue
+            if stop.is_set():
+                return
+            with self.lock:
+                self.cache.save_proton(appid, p)
+                g = self.games.get(appid)
+                if g:
+                    g.proton, g.proton_total, g.proton_ts = p["tier"], p["total"], int(time.time())
+                self._touch(appid)
+                if appid % 10 == 0:
+                    self.cache.commit()
+        with self.lock:
+            self.cache.commit()
 
     def _apply_details(self, appid: int, d: dict | None) -> None:
         self.cache.save_details(appid, d)
@@ -284,6 +335,8 @@ class Library:
             g.short_desc = d.get("short_desc", "")
             g.header_image = d.get("header_image", "")
             g.assets = d.get("assets") or {}
+            g.linux = bool(d.get("linux"))
+            g.deck = d.get("deck", "")
             g.details_ts = int(time.time())
 
     def _apply_reviews(self, appid: int, r: dict) -> None:
@@ -293,7 +346,15 @@ class Library:
             g.positive, g.negative, g.review_desc = r["positive"], r["negative"], r["review_desc"]
             g.reviews_ts = int(time.time())
 
-    def _enrich_batched(self, appids: list[int], client: SteamClient, stop: threading.Event) -> None:
+    def _enrich_batched(self, appids: list[int], client: SteamClient, stop: threading.Event,
+                        done: threading.Event | None = None) -> None:
+        try:
+            self._enrich_batched_inner(appids, client, stop)
+        finally:
+            if done:
+                done.set()
+
+    def _enrich_batched_inner(self, appids: list[int], client: SteamClient, stop: threading.Event) -> None:
         """Ratings, tags, release dates and cover art for 100 games per request."""
         with self.lock:
             tags = self.cache.load_tags()
@@ -313,7 +374,7 @@ class Library:
             chunk = appids[i:i + BATCH]
             try:
                 res = client.store_items(chunk, tags)
-            except SteamError as e:
+            except Exception as e:  # never let this thread die: retry, then fall back
                 failures += 1
                 if failures >= 3:
                     self.set_status(f"Steam's fast batch API failed ({e}); falling back to the slow per-game lookup.", "warn")
@@ -329,7 +390,7 @@ class Library:
                 for appid in chunk:
                     item = res.get(appid)
                     if item is None:  # not on the store (delisted, region locked...)
-                        self._apply_details(appid, None)
+                        self._apply_details(appid, {"assets": {"v": STORE_DATA_VERSION}})
                         self._apply_reviews(appid, {"positive": 0, "negative": 0, "review_desc": ""})
                     else:
                         self._apply_details(appid, item["details"])
@@ -347,7 +408,7 @@ class Library:
                 return
             try:
                 data = fetch(appid, stop)
-            except SteamError:
+            except Exception:
                 continue  # retried on next launch
             if stop.is_set():
                 return
@@ -433,7 +494,7 @@ def make_handler(lib: Library, token: str, port_ref: list):
                 return self._json({"ok": appid > 0})
             if self.path == "/api/open":
                 url = str(data.get("url", ""))
-                if re.match(r"https://(store\.steampowered\.com|steamdb\.info|steamcommunity\.com)/", url):
+                if re.match(r"https://(store\.steampowered\.com|steamdb\.info|steamcommunity\.com|www\.protondb\.com)/", url):
                     open_url(url)
                     return self._json({"ok": True})
                 return self._json({"ok": False}, 400)

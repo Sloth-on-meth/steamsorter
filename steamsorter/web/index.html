@@ -180,6 +180,12 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
 }
 .badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
 .badge.fam { font-weight: 600; color: #c4b5fd; }
+.pdb { position: absolute; left: 9px; bottom: 9px; z-index: 2; pointer-events: none; display: inline-flex; gap: 5px; align-items: center;
+  padding: 3px 8px; border-radius: 7px; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  background: rgba(8,10,15,.85); border: 1px solid color-mix(in srgb, var(--t) 55%, transparent); color: var(--t); }
+.pdb.inline { position: static; }
+.tier-native { --t: #4ade80; } .tier-platinum { --t: #c9dcee; } .tier-gold { --t: #e8c547; }
+.tier-silver { --t: #b4b4b4; } .tier-bronze { --t: #d4894a; } .tier-borked { --t: #ff5a5a; } .tier-none { --t: #6b7385; }
 .badge.new { color: var(--accent2); }
 .card .meta { padding: 10px 2px 0; }
 .card .t { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -396,6 +402,16 @@ main { overflow-y: auto; padding: 22px 26px 60px; position: relative; scroll-beh
       </div>
     </div>
     <div class="sec">
+      <h4>Runs on Linux</h4>
+      <div class="chips" id="linuxChips">
+        <button class="chip on" data-v="0">Any</button><button class="chip" data-v="6">🐧 Native</button>
+        <button class="chip" data-v="5">Platinum+</button><button class="chip" data-v="4">Gold+</button><button class="chip" data-v="3">Silver+</button>
+      </div>
+      <div style="margin-top:10px">
+        <label class="toggle">Hide games borked on Linux <input type="checkbox" id="hideBorked" checked><span></span></label>
+      </div>
+    </div>
+    <div class="sec">
       <div class="range">
         <label>Min. rating <b id="minRatingV">Any</b></label>
         <input type="range" id="minRating" min="0" max="95" step="5" value="0">
@@ -451,10 +467,11 @@ const openExt = url => api("/api/open", {url});
 // ---------------------------------------------------------------- state --
 const S = {
   games: new Map(), rev: 0, configured: true, loading: false, progress: {total: 0, reviews: 0, details: 0},
+  hideBorked: store.get("hideBorked", true),
   family: false, status: "", statusLevel: "info", alertDismissed: false,
   view: store.get("view", "grid"), sort: store.get("sort", "score"), desc: store.get("desc", true),
   q: "", source: "all", played: "any", genres: new Set(), feats: new Set(),
-  minRating: 0, minRev: 0, gamesOnly: true, preset: null,
+  minRating: 0, minRev: 0, gamesOnly: true, preset: null, linuxMin: 0,
   list: [], shown: 0,
 };
 
@@ -463,6 +480,8 @@ const PRESETS = [
    f: {played: "never", minRev: 3, minRating: 0, sort: "score", desc: true}},
   {id: "gems", em: "💎", t: "Hidden gems", d: "Loved by few, 90%+",
    f: {minRating: 90, minRev: 1, sort: "rating", desc: true, maxReviews: 5000}},
+  {id: "linux", em: "🐧", t: "Runs great on Linux", d: "Native or ProtonDB Gold+",
+   f: {linuxMin: 4, minRev: 1, sort: "score", desc: true}},
   {id: "coop", em: "🤝", t: "Co-op night", d: "Games with online co-op",
    f: {feats: ["Online Co-op"], sort: "score", desc: true}},
   {id: "family", em: "👪", t: "Family vault", d: "Shared with you, best first",
@@ -473,12 +492,21 @@ const PRESETS = [
 
 const SORTS = [
   ["score", "Best rated (weighted)"], ["rating", "Rating %"], ["reviews", "Most reviewed"], ["name", "Name"],
-  ["playtime", "Most played"], ["last_played", "Recently played"], ["release", "Release date"],
+  ["playtime", "Most played"], ["last_played", "Recently played"], ["release", "Release date"], ["proton", "Linux / ProtonDB"],
 ];
 
 function color(p) {
   if (p == null) return "#5c6578";
   return p >= .85 ? "var(--good)" : p >= .7 ? "var(--ok)" : p >= .5 ? "var(--mid)" : "var(--bad)";
+}
+const TIER_RANK = {native: 6, platinum: 5, gold: 4, silver: 3, bronze: 2, borked: 1};
+const DECK_LABEL = {verified: "✅ Verified", playable: "🟡 Playable", unsupported: "⛔ Unsupported"};
+function linuxTier(g) { return g.linux ? "native" : g.proton || ""; }
+function tierLabel(t) { return t === "native" ? "🐧 Native" : t ? t[0].toUpperCase() + t.slice(1) : ""; }
+function pdbBadge(g, inline = false) {
+  const t = linuxTier(g);
+  if (!t) return "";
+  return `<span class="pdb tier-${t}${inline ? " inline" : ""}" title="${t === "native" ? "Native Linux version" : "ProtonDB: " + esc(tierLabel(t)) + " (" + fmt(g.proton_total) + " reports)"}">${t === "native" ? "🐧 Native" : "⚛ " + esc(t)}</span>`;
 }
 function hue(id) { return (id * 47) % 360; }
 function ph(g, cls = "ph") {
@@ -500,12 +528,15 @@ function matches(g, maxReviews) {
   if (maxReviews && (g.reviews ?? 0) > maxReviews) return false;
   for (const x of S.genres) if (!g.genres.includes(x)) return false;
   for (const x of S.feats) if (!g.categories.includes(x)) return false;
+  if (S.linuxMin && (TIER_RANK[linuxTier(g)] || 0) < S.linuxMin) return false;
+  if (S.linuxMin === 0 && S.hideBorked && g.proton === "borked" && !g.linux) return false;
   return true;
 }
 const KEYS = {
   score: g => g.score, rating: g => g.rating, reviews: g => g.reviews, name: g => g._lname,
   playtime: g => g.playtime || null, last_played: g => g.last_played || null,
   release: g => g.release_sort || null, metacritic: g => g.metacritic,
+  proton: g => TIER_RANK[linuxTier(g)] ? TIER_RANK[linuxTier(g)] * 10 + (g.score || 0) : null,
 };
 function computeList() {
   const p = PRESETS.find(x => x.id === S.preset);
@@ -571,7 +602,7 @@ function cardBadges(g) {
   const r = g.rating != null ? `<span class="badge" style="--c:${color(g.rating)}"><i></i>${Math.round(g.rating * 100)}%</span>`
     : g.has_reviews ? "" : `<span class="badge skeleton" style="width:46px;height:24px"></span>`;
   const f = g.source === "family" ? `<span class="badge fam" title="Shared by ${esc(g.owners.join(", "))}">👪 ${esc((g.owners[0] || "Family").split(" ")[0])}</span>` : "";
-  return `<div class="badges">${r || "<span></span>"}${f}</div>`;
+  return `<div class="badges">${r || "<span></span>"}${f}</div>${pdbBadge(g)}`;
 }
 function subline(g) {
   const bits = [];
@@ -592,19 +623,18 @@ function rowHTML(g, i) {
   const lib = g.source === "family" ? `<span style="color:#c4b5fd">👪 ${esc(g.owners[0] || "Family")}</span>` : "You";
   return `<div class="row" data-id="${g.appid}" style="--i:${i % CHUNK}">
     ${thumbHTML(g)}
-    <div style="min-width:0"><div class="t">${esc(g.name)}</div><div class="s">${lib}</div></div>
+    <div style="min-width:0"><div class="t">${esc(g.name)}</div><div class="s">${lib}${g.genres.length ? " · " + esc(g.genres.slice(0, 3).join(", ")) : ""}</div></div>
     <div style="--c:${color(r)}">${r != null ? `<div class="rt">${Math.round(r * 100)}% <small>${esc(g.verdict || "")}</small></div><div class="bar"><i style="width:${r * 100}%"></i></div>` : `<div class="s">${g.has_reviews ? "No reviews" : "Loading…"}</div>`}</div>
     <div class="num">${fmt(g.reviews)}</div>
-    <div class="gen">${esc(g.genres.join(", "))}</div>
+    <div class="gen">${pdbBadge(g, true) || (g.has_proton ? `<span class="pdb inline tier-none">No reports</span>` : "")} ${g.deck === "verified" ? '<span title="Steam Deck Verified">✅</span>' : g.deck === "playable" ? '<span title="Steam Deck Playable">🟡</span>' : ""}</div>
     <div class="num">${hrs}</div>
     <div class="num">${rel}</div></div>`;
 }
 
 function swapCover(newCover, oldCover) {
   // Keep the already-loaded image (no flicker) but take the fresh badges.
-  oldCover.querySelector(".badges")?.remove();
-  const b = newCover.querySelector(".badges");
-  if (b) oldCover.appendChild(b);
+  oldCover.querySelectorAll(".badges, .pdb").forEach(x => x.remove());
+  newCover.querySelectorAll(".badges, .pdb").forEach(x => oldCover.appendChild(x));
   newCover.replaceWith(oldCover);
 }
 function render(keepScroll = false) {
@@ -638,7 +668,7 @@ function render(keepScroll = false) {
     html += `<div class="empty"><div class="big">🔍</div><h2>Nothing matches</h2><p>Try loosening your filters.</p><button class="btn" onclick="resetFilters()">Reset filters</button></div>`;
   } else if (S.view === "list") {
     const h = (k, t, r) => `<span data-sort="${k}" class="${r ? "r" : ""}">${t}${S.sort === k ? (S.desc ? " ↓" : " ↑") : ""}</span>`;
-    html += `<div class="list-head"><span></span>${h("name", "Name")}${h("score", "Rating")}${h("reviews", "Reviews", 1)}<span>Genres</span>${h("playtime", "Played", 1)}${h("release", "Year", 1)}</div><div class="list" id="items"></div>`;
+    html += `<div class="list-head"><span></span>${h("name", "Name")}${h("score", "Rating")}${h("reviews", "Reviews", 1)}${h("proton", "Linux")}${h("playtime", "Played", 1)}${h("release", "Year", 1)}</div><div class="list" id="items"></div>`;
   } else {
     html += `<div class="grid" id="items"></div>`;
   }
@@ -740,6 +770,8 @@ function renderPresets() {
 function syncControls() {
   document.querySelectorAll("#segSource button").forEach(b => b.classList.toggle("on", b.dataset.v === S.source));
   document.querySelectorAll("#segPlayed button").forEach(b => b.classList.toggle("on", b.dataset.v === S.played));
+  document.querySelectorAll("#linuxChips .chip").forEach(b => b.classList.toggle("on", +b.dataset.v === S.linuxMin));
+  $("#hideBorked").checked = S.hideBorked;
   $("#minRating").value = S.minRating; $("#minRev").value = S.minRev; $("#gamesOnly").checked = S.gamesOnly;
   $("#q").value = S.qRaw || "";
   updateRangeLabels();
@@ -753,19 +785,20 @@ function updateRangeLabels() {
   $("#minRevV").textContent = +rv.value ? fmt(REV_STEPS[rv.value]) + "+" : "Any";
 }
 window.resetFilters = function () {
-  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, preset: null});
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, preset: null, linuxMin: 0});
   syncControls(); render();
 };
 function applyPreset(id) {
   if (S.preset === id) return resetFilters();
   const p = PRESETS.find(x => x.id === id);
-  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true});
+  Object.assign(S, {q: "", qRaw: "", source: "all", played: "any", genres: new Set(), feats: new Set(), minRating: 0, minRev: 0, gamesOnly: true, linuxMin: 0});
   const f = p.f;
   if (f.played) S.played = f.played;
   if (f.source) S.source = f.source;
   if (f.minRating != null) S.minRating = f.minRating;
   if (f.minRev != null) S.minRev = f.minRev;
   if (f.feats) S.feats = new Set(f.feats);
+  if (f.linuxMin) S.linuxMin = f.linuxMin;
   S.sort = f.sort; S.desc = f.desc;
   S.preset = id;
   syncControls(); render();
@@ -818,6 +851,7 @@ function showGame(id) {
             <button class="btn" onclick="openExt('https://store.steampowered.com/app/${g.appid}/')">Store page</button>
             <button class="btn" onclick="openExt('https://steamdb.info/app/${g.appid}/')">SteamDB</button>
           </div>
+          <button class="btn" onclick="openExt('https://www.protondb.com/app/${g.appid}')">ProtonDB reports</button>
         </div>
         <div class="tiles">
           <div class="tile"><small>Weighted score</small><b>${g.score != null ? (g.score * 100).toFixed(1) : "—"}</b></div>
@@ -825,6 +859,8 @@ function showGame(id) {
           <div class="tile"><small>Your playtime</small><b>${hrs}</b></div>
           <div class="tile"><small>Last played</small><b style="font-size:14px">${last}</b></div>
           <div class="tile"><small>Released</small><b style="font-size:14px">${esc(g.release || "—")}</b></div>
+          <div class="tile"><small>Linux / ProtonDB</small><b style="font-size:14px">${linuxTier(g) ? pdbBadge(g, true) + (g.proton && !g.linux ? ` <span style="color:var(--muted);font-size:12px;font-weight:500">${fmt(g.proton_total)} reports</span>` : "") : g.has_proton ? "No reports" : "Checking…"}</b></div>
+          <div class="tile"><small>Steam Deck</small><b style="font-size:14px">${DECK_LABEL[g.deck] || "Unknown"}</b></div>
           <div class="tile"><small>Library</small><b style="font-size:14px">${g.source === "family" ? "👪 " + esc(g.owners[0] || "Family") : "Yours"}</b></div>
         </div>
       </div>
@@ -868,7 +904,7 @@ function pickForMe() {
     const w = $("#winner");
     const r = winner.rating;
     w.innerHTML = `<h3>${esc(winner.name)}</h3>
-      <div style="color:var(--muted)">${r != null ? `<span style="color:${color(r)};font-weight:700">${Math.round(r * 100)}%</span> ${esc(winner.verdict)} · ` : ""}${esc(winner.genres.join(", "))}${winner.source === "family" ? " · 👪 " + esc(winner.owners[0] || "Family") : ""}</div>
+      <div style="color:var(--muted)">${r != null ? `<span style="color:${color(r)};font-weight:700">${Math.round(r * 100)}%</span> ${esc(winner.verdict)} · ` : ""}${esc(winner.genres.slice(0, 3).join(", "))}${linuxTier(winner) ? " · " + esc(tierLabel(linuxTier(winner))) : ""}${winner.source === "family" ? " · 👪 " + esc(winner.owners[0] || "Family") : ""}</div>
       <div class="row-btns">
         <button class="btn primary big" onclick="launch(${winner.appid})"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>Play it</button>
         <button class="btn big" id="detailsBtn">Details</button>
@@ -984,12 +1020,12 @@ async function poll(force = false) {
   if (statusChanged && !structural && S.configured) render(true);
 
   // progress UI
-  const p = st.progress, done = p.reviews + p.details, all = p.total * 2;
+  const p = st.progress, done = p.reviews + p.details + p.proton, all = p.total * 2 + p.proton_total;
   const fetching = p.total > 0 && done < all;
   $("#progress").classList.toggle("on", fetching || st.loading);
   $("#progress i").style.width = st.loading ? "30%" : (all ? (done / all * 100) + "%" : "0");
   $("#fetchPill").classList.toggle("on", fetching || st.loading);
-  $("#fetchTxt").textContent = st.loading ? "Loading library…" : `Fetching store data ${fmt(Math.min(p.reviews, p.details))}/${fmt(p.total)}`;
+  $("#fetchTxt").textContent = st.loading ? "Loading library…" : (Math.min(p.reviews, p.details) < p.total ? `Fetching store data ${fmt(Math.min(p.reviews, p.details))}/${fmt(p.total)}` : `ProtonDB ${fmt(p.proton)}/${fmt(p.proton_total)}`);
   $("#refreshBtn svg").classList.toggle("spin", st.loading);
 
   if (!S.configured) { if (wasConfigured || !$(".welcome")) render(); }
@@ -1042,6 +1078,12 @@ for (const id of ["#minRating", "#minRev"]) {
     clearTimeout(rTimer); rTimer = setTimeout(filterChanged, 120);
   });
 }
+$("#linuxChips").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b) return;
+  S.linuxMin = +b.dataset.v;
+  document.querySelectorAll("#linuxChips .chip").forEach(x => x.classList.toggle("on", x === b)); filterChanged();
+});
+$("#hideBorked").onchange = e => { S.hideBorked = e.target.checked; store.set("hideBorked", S.hideBorked); filterChanged(); };
 $("#gamesOnly").onchange = e => { S.gamesOnly = e.target.checked; renderFacets(); filterChanged(); };
 $("#pickBtn").onclick = pickForMe;
 $("#refreshBtn").onclick = async () => { await api("/api/refresh", {}); toast("Refreshing your library…"); poll(); };

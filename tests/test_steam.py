@@ -89,3 +89,35 @@ class TokenPaste(unittest.TestCase):
         ]
         for c in cases:
             self.assertEqual(extract_token(c), tok, c)
+
+
+class StoreItemsResponse(unittest.TestCase):
+    """Shape of a real IStoreBrowseService/GetItems response (id is a plain int)."""
+
+    def test_store_items_real_shape(self):
+        from unittest import mock
+
+        from steamsorter.steam import SteamClient
+
+        resp = {"response": {"store_items": [
+            {"item_type": 0, "id": 620, "success": 1, "visible": True, "name": "Portal 2", "appid": 620,
+             "reviews": {"summary_filtered": {"review_count": 100, "percent_positive": 99,
+                                              "review_score_label": "Overwhelmingly Positive"}}},
+            {"item_type": 0, "id": 999, "success": 2},  # unknown app: no appid key
+            {"item_type": 0, "id": 400, "success": 1, "visible": True, "name": "Portal", "categories": "junk"},
+        ]}}
+        c = SteamClient()
+        c.batch_throttle.interval = 0
+        with mock.patch("steamsorter.steam.http_json", return_value=resp):
+            out = c.store_items([620, 999, 400], {})
+        self.assertEqual(out[620]["reviews"]["positive"], 99)
+        self.assertIsNone(out[999])
+        self.assertNotIn(400, out)  # malformed entry is skipped, not fatal
+
+    def test_store_item_appid(self):
+        from steamsorter.steam import store_item_appid
+
+        self.assertEqual(store_item_appid({"id": 620}), 620)
+        self.assertEqual(store_item_appid({"id": {"appid": 620}}), 620)
+        self.assertEqual(store_item_appid({"appid": 70, "id": 70}), 70)
+        self.assertEqual(store_item_appid({}), 0)
